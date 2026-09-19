@@ -29,8 +29,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
 
     buildFeatures {
@@ -79,7 +81,7 @@ val downloadAiModel = tasks.register("downloadAiModel") {
             target.parentFile.mkdirs()
             val temp = File(target.parentFile, target.name + ".download")
             if (temp.exists()) temp.delete()
-            val connection = java.net.URI(aiModelUrl).toURL().openConnection().apply {
+            val connection = java.net.URI.create(aiModelUrl).toURL().openConnection().apply {
                 connectTimeout = 20_000
                 readTimeout = 60_000
             }

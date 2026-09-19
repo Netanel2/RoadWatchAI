@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/rw_bg">
+    android:background="#000000">
 
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
@@ -11,20 +11,21 @@
         android:layout_height="match_parent"
         android:background="#000000"
         app:implementationMode="performance"
-        app:scaleType="fillCenter" />
+        app:scaleType="fitCenter" />
 
     <com.netanel.roadwatch.ui.OverlayView
         android:id="@+id/overlayView"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- Compact header. No large dashboard covering the camera. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="16dp"
-        android:paddingTop="10dp"
-        android:paddingEnd="16dp">
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -43,14 +44,13 @@
                     android:layout_height="wrap_content"
                     android:text="ROADWATCH AI"
                     android:textColor="@color/rw_text"
-                    android:textSize="20sp"
+                    android:textSize="18sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="1dp"
-                    android:text="V3 · ROAD-GATED MULTI-ANGLE AI"
+                    android:text="V4 · AUTO COUNT · NO SETUP"
                     android:textColor="@color/rw_blue"
                     android:textSize="9sp"
                     android:textStyle="bold" />
@@ -59,255 +59,156 @@
                     android:id="@+id/txtStatus"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="מאתחל מצלמה..."
+                    android:layout_marginTop="1dp"
+                    android:text="מאתחל..."
                     android:textColor="@color/rw_muted"
-                    android:textSize="12sp" />
+                    android:textSize="10sp" />
             </LinearLayout>
 
             <LinearLayout
                 android:layout_width="wrap_content"
-                android:layout_height="40dp"
+                android:layout_height="34dp"
                 android:background="@drawable/stat_bg"
                 android:gravity="center"
                 android:orientation="horizontal"
-                android:paddingStart="12dp"
-                android:paddingEnd="12dp">
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp">
 
                 <View
-                    android:layout_width="8dp"
-                    android:layout_height="8dp"
+                    android:layout_width="7dp"
+                    android:layout_height="7dp"
                     android:background="@drawable/live_dot" />
 
                 <TextView
                     android:id="@+id/txtLive"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="7dp"
+                    android:layout_marginStart="6dp"
                     android:text="OFFLINE"
                     android:textColor="@color/rw_text"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
                     android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/bottomPanel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:layout_margin="10dp"
-        android:background="@drawable/panel_bg"
-        android:orientation="vertical"
-        android:padding="10dp">
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="54dp"
+            android:layout_marginTop="6dp"
             android:orientation="horizontal"
             android:weightSum="4">
 
             <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="66dp"
-                android:layout_marginEnd="5dp"
+                android:layout_height="match_parent"
+                android:layout_marginEnd="3dp"
                 android:layout_weight="1"
                 android:background="@drawable/stat_bg"
                 android:gravity="center"
                 android:orientation="vertical">
-                <TextView android:id="@+id/txtParkedNow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_green" android:textSize="23sp" android:textStyle="bold" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/parked_now" android:textColor="@color/rw_muted" android:textSize="11sp" />
+                <TextView android:id="@+id/txtParkedNow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_green" android:textSize="20sp" android:textStyle="bold" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="חונים" android:textColor="@color/rw_muted" android:textSize="9sp" />
             </LinearLayout>
 
             <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="66dp"
-                android:layout_marginStart="5dp"
-                android:layout_marginEnd="5dp"
-                android:layout_weight="1"
-                android:background="@drawable/stat_bg"
-                android:gravity="center"
-                android:orientation="vertical">
-                <TextView android:id="@+id/txtMovingNow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_blue" android:textSize="23sp" android:textStyle="bold" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/moving_now" android:textColor="@color/rw_muted" android:textSize="11sp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="66dp"
-                android:layout_marginStart="5dp"
-                android:layout_marginEnd="5dp"
-                android:layout_weight="1"
-                android:background="@drawable/stat_bg"
-                android:gravity="center"
-                android:orientation="vertical">
-                <TextView android:id="@+id/txtPassedToday" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_text" android:textSize="23sp" android:textStyle="bold" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/passed_today" android:textColor="@color/rw_muted" android:textSize="11sp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="66dp"
-                android:layout_marginStart="5dp"
-                android:layout_weight="1"
-                android:background="@drawable/stat_bg"
-                android:gravity="center"
-                android:orientation="vertical">
-                <TextView android:id="@+id/txtParkedToday" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_amber" android:textSize="23sp" android:textStyle="bold" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/parked_today" android:textColor="@color/rw_muted" android:textSize="11sp" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="32dp"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal">
-
-            <TextView
-                android:id="@+id/txtLeftToday"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_marginEnd="4dp"
+                android:layout_marginStart="3dp"
+                android:layout_marginEnd="3dp"
                 android:layout_weight="1"
                 android:background="@drawable/stat_bg"
                 android:gravity="center"
-                android:text="יצאו מחניה 0"
-                android:textColor="@color/rw_muted"
-                android:textSize="11sp"
-                android:textStyle="bold" />
+                android:orientation="vertical">
+                <TextView android:id="@+id/txtMovingNow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_blue" android:textSize="20sp" android:textStyle="bold" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="בתנועה" android:textColor="@color/rw_muted" android:textSize="9sp" />
+            </LinearLayout>
 
-            <TextView
-                android:id="@+id/txtActiveTracks"
+            <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_marginStart="4dp"
+                android:layout_marginStart="3dp"
+                android:layout_marginEnd="3dp"
                 android:layout_weight="1"
                 android:background="@drawable/stat_bg"
                 android:gravity="center"
-                android:text="במעקב 0"
-                android:textColor="@color/rw_muted"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:id="@+id/txtDiagnostics"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="AI -- ms  •  0 tracks"
-                android:textColor="@color/rw_muted"
-                android:textSize="11sp" />
-
-            <TextView
-                android:id="@+id/txtBreakdown"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="רכב 0 · משאית 0 · אופנוע 0"
-                android:textColor="@color/rw_muted"
-                android:textSize="11sp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:orientation="horizontal">
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnSetup"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="0dp"
-                android:layout_height="42dp"
-                android:layout_marginEnd="5dp"
-                android:layout_weight="1"
-                android:text="@string/setup_zones"
-                android:textColor="@color/rw_text"
-                app:strokeColor="@color/rw_border" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnReset"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="0dp"
-                android:layout_height="42dp"
-                android:layout_marginStart="5dp"
-                android:layout_weight="1"
-                android:text="@string/reset_day"
-                android:textColor="@color/rw_text"
-                app:strokeColor="@color/rw_border" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/setupPanel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:orientation="vertical"
-            android:visibility="gone">
-
-            <TextView
-                android:id="@+id/txtSetupHint"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:padding="8dp"
-                android:text="סמן כביש, הוסף אזור חניה אחד או יותר, ולבסוף קו ספירה."
-                android:textColor="@color/rw_text"
-                android:textSize="12sp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnRoad" android:layout_width="0dp" android:layout_height="44dp" android:layout_marginEnd="4dp" android:layout_weight="1" android:text="@string/road_zone" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnParking" android:layout_width="0dp" android:layout_height="44dp" android:layout_marginStart="4dp" android:layout_marginEnd="4dp" android:layout_weight="1" android:text="@string/parking_zone" />
-                <com.google.android.material.button.MaterialButton android:id="@+id/btnLine" android:layout_width="0dp" android:layout_height="44dp" android:layout_marginStart="4dp" android:layout_weight="1" android:text="@string/count_line" />
+                android:orientation="vertical">
+                <TextView android:id="@+id/txtPassedToday" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_text" android:textSize="20sp" android:textStyle="bold" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="עברו היום" android:textColor="@color/rw_muted" android:textSize="9sp" />
             </LinearLayout>
 
             <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnUndoParking"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_marginEnd="4dp"
-                    android:layout_weight="1"
-                    android:text="@string/remove_last_parking"
-                    android:textColor="@color/rw_text"
-                    app:strokeColor="@color/rw_border" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnClearZones"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_marginStart="4dp"
-                    android:layout_weight="1"
-                    android:text="@string/clear_zones"
-                    android:textColor="@color/rw_text"
-                    app:strokeColor="@color/rw_border" />
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginStart="3dp"
+                android:layout_weight="1"
+                android:background="@drawable/stat_bg"
+                android:gravity="center"
+                android:orientation="vertical">
+                <TextView android:id="@+id/txtParkedToday" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_amber" android:textSize="20sp" android:textStyle="bold" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="חנו היום" android:textColor="@color/rw_muted" android:textSize="9sp" />
             </LinearLayout>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnSaveSetup"
-                android:layout_width="match_parent"
-                android:layout_height="46dp"
-                android:layout_marginTop="8dp"
-                android:text="@string/save_setup" />
         </LinearLayout>
+    </LinearLayout>
+
+    <!-- Only the controls stay at the bottom; about one row instead of a giant panel. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_gravity="bottom"
+        android:layout_margin="10dp"
+        android:background="@drawable/panel_bg"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingEnd="8dp">
+
+        <TextView
+            android:id="@+id/txtZoom"
+            android:layout_width="46dp"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="1.0×"
+            android:textColor="@color/rw_text"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <SeekBar
+            android:id="@+id/zoomSeek"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="שליטה בזום" />
+
+        <TextView
+            android:id="@+id/txtActiveTracks"
+            android:layout_width="64dp"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="מעקב 0"
+            android:textColor="@color/rw_muted"
+            android:textSize="9sp" />
+
+        <TextView
+            android:id="@+id/txtLeftToday"
+            android:layout_width="58dp"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="יצאו 0"
+            android:textColor="@color/rw_muted"
+            android:textSize="9sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnReset"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="64dp"
+            android:layout_height="40dp"
+            android:minWidth="0dp"
+            android:paddingStart="5dp"
+            android:paddingEnd="5dp"
+            android:text="איפוס"
+            android:textColor="@color/rw_text"
+            android:textSize="10sp"
+            app:strokeColor="@color/rw_border" />
     </LinearLayout>
 
 </FrameLayout>

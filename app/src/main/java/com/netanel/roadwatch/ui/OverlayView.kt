@@ -16,7 +16,7 @@ import com.netanel.roadwatch.core.TrackVisual
 import com.netanel.roadwatch.core.Vec2
 import com.netanel.roadwatch.core.VehicleState
 import com.netanel.roadwatch.core.ZoneConfig
-import kotlin.math.max
+import kotlin.math.min
 
 class OverlayView @JvmOverloads constructor(
     context: Context,
@@ -37,27 +37,23 @@ class OverlayView @JvmOverloads constructor(
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = dp(2.4f)
+        strokeWidth = dp(1.8f)
     }
     private val zonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = dp(2.4f)
+        strokeWidth = dp(2.2f)
     }
-    private val zoneFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
+    private val zoneFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val labelBg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.argb(215, 8, 15, 24)
+        color = Color.argb(205, 8, 15, 24)
     }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
-        textSize = sp(12f)
+        textSize = sp(10f)
         typeface = android.graphics.Typeface.DEFAULT_BOLD
     }
-    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val dashedEffect = android.graphics.DashPathEffect(floatArrayOf(dp(8f), dp(7f)), 0f)
 
     init {
@@ -117,12 +113,10 @@ class OverlayView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (editMode == EditMode.NONE) return false
         if (event.action != MotionEvent.ACTION_UP) return true
-
         val point = viewToNormalized(event.x, event.y) ?: return true
         draft += point
         val required = requiredPoints(editMode)
         onEditProgress?.invoke(editHint(editMode, draft.size, required))
-
         if (draft.size >= required) {
             zones = when (editMode) {
                 EditMode.ROAD -> zones.copy(road = Polygon2(draft.toList()))
@@ -131,7 +125,6 @@ class OverlayView @JvmOverloads constructor(
                 EditMode.NONE -> zones
             }
             onZonesChanged?.invoke(zones)
-            onEditProgress?.invoke("הסימון נקלט ✓ אפשר לשמור או לסמן אזור נוסף")
             editMode = EditMode.NONE
             draft.clear()
         }
@@ -141,25 +134,26 @@ class OverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        drawZones(canvas)
+        if (editMode != EditMode.NONE || zones.road.isValid() || zones.parkingZones.isNotEmpty() || zones.countLine != null) {
+            drawZones(canvas)
+        }
         drawTracks(canvas)
         drawDraft(canvas)
     }
 
     private fun drawZones(canvas: Canvas) {
-        drawPolygon(canvas, zones.road, Color.rgb(54, 201, 235), Color.argb(25, 54, 201, 235))
+        drawPolygon(canvas, zones.road, Color.rgb(54, 201, 235), Color.argb(20, 54, 201, 235))
         zones.parkingZones.forEachIndexed { index, polygon ->
-            drawPolygon(canvas, polygon, Color.rgb(66, 216, 154), Color.argb(28, 66, 216, 154))
+            drawPolygon(canvas, polygon, Color.rgb(66, 216, 154), Color.argb(22, 66, 216, 154))
             polygon.points.firstOrNull()?.let { point ->
                 val p = normalizedToView(point)
                 drawLabel(canvas, "P${index + 1}", p.x, p.y, Color.rgb(66, 216, 154))
             }
         }
-
         zones.countLine?.let { line ->
             zonePaint.color = Color.rgb(245, 196, 81)
             zonePaint.pathEffect = dashedEffect
-            zonePaint.strokeWidth = dp(3f)
+            zonePaint.strokeWidth = dp(2.4f)
             val a = normalizedToView(line.a)
             val b = normalizedToView(line.b)
             canvas.drawLine(a.x, a.y, b.x, b.y, zonePaint)
@@ -179,13 +173,11 @@ class OverlayView @JvmOverloads constructor(
         canvas.drawPath(path, zoneFillPaint)
         zonePaint.color = stroke
         zonePaint.pathEffect = dashedEffect
-        zonePaint.strokeWidth = dp(2.3f)
         canvas.drawPath(path, zonePaint)
         zonePaint.pathEffect = null
     }
 
     private fun drawTracks(canvas: Canvas) {
-        val now = android.os.SystemClock.uptimeMillis()
         visuals.forEach { visual ->
             val rect = boxToView(visual.track.box)
             val color = when (visual.state) {
@@ -196,31 +188,33 @@ class OverlayView @JvmOverloads constructor(
                 VehicleState.UNKNOWN -> Color.rgb(150, 166, 184)
             }
             boxPaint.color = color
-            boxPaint.strokeWidth = if (visual.state == VehicleState.PARKED) dp(3f) else dp(2.2f)
-            canvas.drawRoundRect(rect, dp(7f), dp(7f), boxPaint)
+            boxPaint.strokeWidth = if (visual.state == VehicleState.PARKED) dp(2.4f) else dp(1.8f)
+            canvas.drawRoundRect(rect, dp(6f), dp(6f), boxPaint)
 
-            dotPaint.color = color
-            val bottom = normalizedToView(visual.track.bottomCenter)
-            canvas.drawCircle(bottom.x, bottom.y, dp(4f), dotPaint)
-
-            val stateSeconds = ((now - visual.stateSinceMs).coerceAtLeast(0L) / 1000L)
-            val suffix = if (visual.state == VehicleState.PARKED) " · ${stateSeconds}s" else ""
             val conf = (visual.track.confidence * 100f).toInt().coerceIn(0, 100)
-            val label = "#${visual.track.id} · ${visual.track.vehicleClass.he} · ${visual.state.he} · ${conf}%$suffix"
-            drawLabel(canvas, label, rect.left, rect.top, color)
+            val stateText = when (visual.state) {
+                VehicleState.PARKED -> "חונה"
+                VehicleState.MOVING -> "נע"
+                VehicleState.STOPPING -> "עוצר"
+                VehicleState.LEAVING -> "יוצא"
+                VehicleState.UNKNOWN -> "בודק"
+            }
+            drawLabel(canvas, "#${visual.track.id} · $stateText · $conf%", rect.left, rect.top, color)
         }
     }
 
     private fun drawLabel(canvas: Canvas, text: String, x: Float, y: Float, accent: Int) {
-        val paddingX = dp(7f)
-        val paddingY = dp(5f)
+        val paddingX = dp(5f)
+        val paddingY = dp(4f)
         val width = labelPaint.measureText(text) + paddingX * 2
         val height = labelPaint.textSize + paddingY * 2
         val top = (y - height).coerceAtLeast(0f)
-        val bg = RectF(x, top, (x + width).coerceAtMost(this.width.toFloat()), top + height)
-        canvas.drawRoundRect(bg, dp(6f), dp(6f), labelBg)
+        val right = (x + width).coerceAtMost(this.width.toFloat())
+        val left = (right - width).coerceAtLeast(0f)
+        val bg = RectF(left, top, right, top + height)
+        canvas.drawRoundRect(bg, dp(5f), dp(5f), labelBg)
         dotPaint.color = accent
-        canvas.drawRect(bg.left, bg.top, bg.left + dp(3f), bg.bottom, dotPaint)
+        canvas.drawRect(bg.left, bg.top, bg.left + dp(2.5f), bg.bottom, dotPaint)
         canvas.drawText(text, bg.left + paddingX, bg.bottom - paddingY, labelPaint)
     }
 
@@ -233,14 +227,11 @@ class OverlayView @JvmOverloads constructor(
             EditMode.NONE -> Color.WHITE
         }
         zonePaint.color = color
-        zonePaint.strokeWidth = dp(2.5f)
         dotPaint.color = color
-
         var previous: Vec2? = null
-        draft.forEachIndexed { index, point ->
+        draft.forEach { point ->
             val p = normalizedToView(point)
-            canvas.drawCircle(p.x, p.y, dp(7f), dotPaint)
-            canvas.drawText("${index + 1}", p.x + dp(9f), p.y - dp(8f), labelPaint)
+            canvas.drawCircle(p.x, p.y, dp(6f), dotPaint)
             previous?.let {
                 val pp = normalizedToView(it)
                 canvas.drawLine(pp.x, pp.y, p.x, p.y, zonePaint)
@@ -249,10 +240,12 @@ class OverlayView @JvmOverloads constructor(
         }
     }
 
+    // V4 uses PreviewView.FIT_CENTER so the complete camera image is visible.
+    // Overlay geometry must use the same fit transform to stay pixel-aligned.
     private fun frameRect(): RectF {
         val viewW = width.toFloat().coerceAtLeast(1f)
         val viewH = height.toFloat().coerceAtLeast(1f)
-        val scale = max(viewW / imageWidth, viewH / imageHeight)
+        val scale = min(viewW / imageWidth, viewH / imageHeight)
         val drawW = imageWidth * scale
         val drawH = imageHeight * scale
         val left = (viewW - drawW) * 0.5f
@@ -262,10 +255,7 @@ class OverlayView @JvmOverloads constructor(
 
     private fun normalizedToView(point: Vec2): Vec2 {
         val rect = frameRect()
-        return Vec2(
-            rect.left + point.x * rect.width(),
-            rect.top + point.y * rect.height()
-        )
+        return Vec2(rect.left + point.x * rect.width(), rect.top + point.y * rect.height())
     }
 
     private fun viewToNormalized(x: Float, y: Float): Vec2? {
@@ -289,15 +279,8 @@ class OverlayView @JvmOverloads constructor(
         EditMode.NONE -> 0
     }
 
-    private fun editHint(mode: EditMode, current: Int, required: Int): String {
-        val name = when (mode) {
-            EditMode.ROAD -> "הכביש"
-            EditMode.PARKING -> "אזור החניה"
-            EditMode.COUNT_LINE -> "קו הספירה"
-            EditMode.NONE -> ""
-        }
-        return "סמן $name · נקודה ${(current + 1).coerceAtMost(required)}/$required"
-    }
+    private fun editHint(mode: EditMode, current: Int, required: Int): String =
+        "נקודה ${(current + 1).coerceAtMost(required)}/$required"
 
     private fun dp(value: Float): Float = value * resources.displayMetrics.density
     private fun sp(value: Float): Float = value * resources.displayMetrics.scaledDensity

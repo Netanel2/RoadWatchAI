@@ -82,19 +82,31 @@ class VehicleStateEngine(
             .filter { it.hits >= 2 }
             .map { track -> updateTrack(track, zones, nowMs) }
 
-        val parkedNow = visuals.count { it.state == VehicleState.PARKED }
-        val movingNow = visuals.count {
+        // Visualize every confirmed AI track for debugging, but dashboard counts are
+        // restricted to the configured road / parking areas. This prevents a vehicle
+        // elsewhere in the camera view from inflating "moving now".
+        val relevantVisuals = if (zones.road.isValid() || zones.parkingZones.isNotEmpty()) {
+            visuals.filter { visual ->
+                val point = visual.track.bottomCenter
+                zones.road.contains(point) || zones.isInParking(point)
+            }
+        } else {
+            visuals
+        }
+
+        val parkedNow = relevantVisuals.count { it.state == VehicleState.PARKED }
+        val movingNow = relevantVisuals.count {
             it.state == VehicleState.MOVING || it.state == VehicleState.LEAVING
         }
 
-        val current = visuals.map { it.track }
+        val current = relevantVisuals.map { it.track }
         val metrics = DashboardMetrics(
             parkedNow = parkedNow,
             movingNow = movingNow,
             passedToday = passedToday,
             parkedToday = parkedToday,
             leftParkingToday = leftParkingToday,
-            activeTracks = visuals.size,
+            activeTracks = relevantVisuals.size,
             carsNow = current.count { it.vehicleClass == VehicleClass.CAR },
             trucksNow = current.count { it.vehicleClass == VehicleClass.TRUCK },
             busesNow = current.count { it.vehicleClass == VehicleClass.BUS },

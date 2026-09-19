@@ -1,4 +1,4 @@
-# RoadWatch AI — Native Android
+# RoadWatch AI V2 — Native Android
 
 Professional on-device vehicle analytics for a fixed phone camera. The app is designed to keep the camera preview smooth while independently detecting, tracking and classifying vehicle state over time.
 
@@ -62,3 +62,8 @@ The repository contains `.github/workflows/build-apk.yml`. Push the project to G
 ## Verification performed in this workspace
 
 The Android APK itself cannot be compiled in this execution environment because no Android SDK/Gradle installation is available here. The platform-independent Kotlin core **was compiled with `kotlinc` and passed a smoke test** covering tracking continuity, speed, parking dwell, multiple parking zones, and finite line crossing. Android XML resources were also parsed successfully.
+
+
+## V2 Dual-Angle engine
+
+V2 replaces EfficientDet with an adaptive dual-model LiteRT pipeline: YOLO26n for standard street views plus YOLO26n-OBB/DOTA for steep/aerial/rotated vehicles. See `V2_DUAL_ANGLE.md`.

@@ -106,7 +106,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         setupPanel = findViewById(R.id.setupPanel)
         txtSetupHint = findViewById(R.id.txtSetupHint)
 
-        previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
+        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
     }
 
     private fun wireUi() {
@@ -174,7 +174,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
             dailyStore.clear()
             lastPersistedDaily = stateEngine.dailyCounts()
             lastMetrics = DashboardMetrics()
-            updateDashboard(lastMetrics, 0L, 0)
+            updateDashboard(lastMetrics, VehicleDetector.Result(emptyList(), 0L, 0L, 0L, 0, 0, 1, 1, android.os.SystemClock.uptimeMillis(), delegateLabel), 0)
             setStatus("מוני היום אופסו")
         }
     }
@@ -240,15 +240,10 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     }
 
     override fun onResult(result: VehicleDetector.Result) {
-        val relevantDetections = if (zones.road.isValid() || zones.parkingZones.isNotEmpty()) {
-            result.detections.filter { detection ->
-                val point = detection.box.bottomCenter
-                zones.road.contains(point) || zones.isInParking(point)
-            }
-        } else {
-            result.detections
-        }
-        val tracks = tracker.update(relevantDetections, result.timestampMs)
+        // Track every AI vehicle first. Zone filtering belongs to the state/counting
+        // layer, not the detector layer. This preserves IDs while a car enters/leaves
+        // a marked road or parking area and also makes detector debugging truthful.
+        val tracks = tracker.update(result.detections, result.timestampMs)
         val (visuals, metrics) = stateEngine.update(tracks, zones, result.timestampMs)
         val daily = stateEngine.dailyCounts()
         if (daily != lastPersistedDaily) {
@@ -257,6 +252,15 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         }
         lastMetrics = metrics
 
+        val inZoneDetections = if (zones.road.isValid() || zones.parkingZones.isNotEmpty()) {
+            result.detections.count { detection ->
+                val point = detection.box.bottomCenter
+                zones.road.contains(point) || zones.isInParking(point)
+            }
+        } else {
+            result.detections.size
+        }
+
         runOnUiThread {
             overlayView.setScene(
                 trackVisuals = visuals,
@@ -264,9 +268,9 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
                 rotatedImageWidth = result.rotatedWidth,
                 rotatedImageHeight = result.rotatedHeight
             )
-            updateDashboard(metrics, result.inferenceMs, relevantDetections.size)
+            updateDashboard(metrics, result, inZoneDetections)
             if (zones.isComplete()) {
-                txtStatus.text = "סורק · ${metrics.activeTracks} רכבים במעקב"
+                txtStatus.text = "סורק · ${metrics.activeTracks} באזור · RAW ${result.detections.size}"
             }
         }
     }
@@ -275,15 +279,15 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         runOnUiThread { setStatus(message) }
     }
 
-    private fun updateDashboard(metrics: DashboardMetrics, inferenceMs: Long, detections: Int) {
+    private fun updateDashboard(metrics: DashboardMetrics, result: VehicleDetector.Result, inZoneDetections: Int) {
         txtParkedNow.text = metrics.parkedNow.toString()
         txtMovingNow.text = metrics.movingNow.toString()
         txtPassedToday.text = metrics.passedToday.toString()
         txtParkedToday.text = metrics.parkedToday.toString()
         txtLeftToday.text = "יצאו מחניה ${metrics.leftParkingToday}"
         txtActiveTracks.text = "במעקב ${metrics.activeTracks}"
-        txtDiagnostics.text = "$delegateLabel · ${inferenceMs}ms · $detections זיהויים"
-        txtBreakdown.text = "מכוניות ${metrics.carsNow} · משאיות ${metrics.trucksNow} · אוטובוסים ${metrics.busesNow} · אופנועים ${metrics.motorcyclesNow}"
+        txtDiagnostics.text = "${result.engineLabel} · ${result.inferenceMs}ms · RAW ${result.detections.size} · ZONE $inZoneDetections"
+        txtBreakdown.text = "Street ${result.generalVehicles} · Aerial ${result.aerialVehicles} · מכוניות ${metrics.carsNow} · משאיות ${metrics.trucksNow} · אוטובוסים ${metrics.busesNow} · אופנועים ${metrics.motorcyclesNow}"
     }
 
     private fun setupSummary(): String = buildString {

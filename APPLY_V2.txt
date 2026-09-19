@@ -1,0 +1,11 @@
+RoadWatch AI V2 upgrade
+
+In an existing RoadWatchAI Codespace, copy the contents of this ZIP over the repo root,
+then run:
+
+  git add .
+  git commit -m "RoadWatch AI V2 dual-angle YOLO"
+  git push
+
+GitHub Actions will download the two official verified YOLO models, run tests,
+build the APK, and publish artifact: RoadWatchAI-v2-debug-apk

@@ -11,7 +11,7 @@
         android:layout_height="match_parent"
         android:background="#000000"
         app:implementationMode="performance"
-        app:scaleType="fitCenter" />
+        app:scaleType="fillCenter" />
 
     <com.netanel.roadwatch.ui.OverlayView
         android:id="@+id/overlayView"
@@ -23,7 +23,7 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:paddingStart="16dp"
-        android:paddingTop="14dp"
+        android:paddingTop="10dp"
         android:paddingEnd="16dp">
 
         <LinearLayout
@@ -50,7 +50,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="1dp"
-                    android:text="ON-DEVICE VEHICLE ANALYTICS"
+                    android:text="DUAL-ANGLE VEHICLE INTELLIGENCE"
                     android:textColor="@color/rw_blue"
                     android:textSize="9sp"
                     android:textStyle="bold" />
@@ -97,10 +97,10 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:layout_margin="12dp"
+        android:layout_margin="10dp"
         android:background="@drawable/panel_bg"
         android:orientation="vertical"
-        android:padding="12dp">
+        android:padding="10dp">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -110,58 +110,58 @@
 
             <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="82dp"
+                android:layout_height="66dp"
                 android:layout_marginEnd="5dp"
                 android:layout_weight="1"
                 android:background="@drawable/stat_bg"
                 android:gravity="center"
                 android:orientation="vertical">
-                <TextView android:id="@+id/txtParkedNow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_green" android:textSize="28sp" android:textStyle="bold" />
+                <TextView android:id="@+id/txtParkedNow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_green" android:textSize="23sp" android:textStyle="bold" />
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/parked_now" android:textColor="@color/rw_muted" android:textSize="11sp" />
             </LinearLayout>
 
             <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="82dp"
+                android:layout_height="66dp"
                 android:layout_marginStart="5dp"
                 android:layout_marginEnd="5dp"
                 android:layout_weight="1"
                 android:background="@drawable/stat_bg"
                 android:gravity="center"
                 android:orientation="vertical">
-                <TextView android:id="@+id/txtMovingNow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_blue" android:textSize="28sp" android:textStyle="bold" />
+                <TextView android:id="@+id/txtMovingNow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_blue" android:textSize="23sp" android:textStyle="bold" />
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/moving_now" android:textColor="@color/rw_muted" android:textSize="11sp" />
             </LinearLayout>
 
             <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="82dp"
+                android:layout_height="66dp"
                 android:layout_marginStart="5dp"
                 android:layout_marginEnd="5dp"
                 android:layout_weight="1"
                 android:background="@drawable/stat_bg"
                 android:gravity="center"
                 android:orientation="vertical">
-                <TextView android:id="@+id/txtPassedToday" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_text" android:textSize="28sp" android:textStyle="bold" />
+                <TextView android:id="@+id/txtPassedToday" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_text" android:textSize="23sp" android:textStyle="bold" />
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/passed_today" android:textColor="@color/rw_muted" android:textSize="11sp" />
             </LinearLayout>
 
             <LinearLayout
                 android:layout_width="0dp"
-                android:layout_height="82dp"
+                android:layout_height="66dp"
                 android:layout_marginStart="5dp"
                 android:layout_weight="1"
                 android:background="@drawable/stat_bg"
                 android:gravity="center"
                 android:orientation="vertical">
-                <TextView android:id="@+id/txtParkedToday" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_amber" android:textSize="28sp" android:textStyle="bold" />
+                <TextView android:id="@+id/txtParkedToday" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="@color/rw_amber" android:textSize="23sp" android:textStyle="bold" />
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/parked_today" android:textColor="@color/rw_muted" android:textSize="11sp" />
             </LinearLayout>
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="38dp"
+            android:layout_height="32dp"
             android:layout_marginTop="8dp"
             android:orientation="horizontal">
 
@@ -227,7 +227,7 @@
                 android:id="@+id/btnSetup"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="42dp"
                 android:layout_marginEnd="5dp"
                 android:layout_weight="1"
                 android:text="@string/setup_zones"
@@ -238,7 +238,7 @@
                 android:id="@+id/btnReset"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
-                android:layout_height="48dp"
+                android:layout_height="42dp"
                 android:layout_marginStart="5dp"
                 android:layout_weight="1"
                 android:text="@string/reset_day"

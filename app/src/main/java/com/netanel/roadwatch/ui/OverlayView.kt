@@ -16,7 +16,7 @@ import com.netanel.roadwatch.core.TrackVisual
 import com.netanel.roadwatch.core.Vec2
 import com.netanel.roadwatch.core.VehicleState
 import com.netanel.roadwatch.core.ZoneConfig
-import kotlin.math.min
+import kotlin.math.max
 
 class OverlayView @JvmOverloads constructor(
     context: Context,
@@ -205,7 +205,8 @@ class OverlayView @JvmOverloads constructor(
 
             val stateSeconds = ((now - visual.stateSinceMs).coerceAtLeast(0L) / 1000L)
             val suffix = if (visual.state == VehicleState.PARKED) " · ${stateSeconds}s" else ""
-            val label = "#${visual.track.id} · ${visual.track.vehicleClass.he} · ${visual.state.he}$suffix"
+            val conf = (visual.track.confidence * 100f).toInt().coerceIn(0, 100)
+            val label = "#${visual.track.id} · ${visual.track.vehicleClass.he} · ${visual.state.he} · ${conf}%$suffix"
             drawLabel(canvas, label, rect.left, rect.top, color)
         }
     }
@@ -251,7 +252,7 @@ class OverlayView @JvmOverloads constructor(
     private fun frameRect(): RectF {
         val viewW = width.toFloat().coerceAtLeast(1f)
         val viewH = height.toFloat().coerceAtLeast(1f)
-        val scale = min(viewW / imageWidth, viewH / imageHeight)
+        val scale = max(viewW / imageWidth, viewH / imageHeight)
         val drawW = imageWidth * scale
         val drawH = imageHeight * scale
         val left = (viewW - drawW) * 0.5f

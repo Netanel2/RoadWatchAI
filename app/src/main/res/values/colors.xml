@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="rw_bg">#07111D</color>
+    <color name="rw_panel">#E6121E2B</color>
+    <color name="rw_panel_solid">#121E2B</color>
+    <color name="rw_card">#17283A</color>
+    <color name="rw_border">#29435C</color>
+    <color name="rw_text">#F4F8FC</color>
+    <color name="rw_muted">#9EB0C3</color>
+    <color name="rw_blue">#4AA8FF</color>
+    <color name="rw_green">#42D89A</color>
+    <color name="rw_amber">#F5C451</color>
+    <color name="rw_red">#FF6B7A</color>
+</resources>

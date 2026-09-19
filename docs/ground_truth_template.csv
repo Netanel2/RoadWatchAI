@@ -1,0 +1,5 @@
+timestamp,event_type,direction,vehicle_class,track_note,ground_truth_count,app_count,match,notes
+00:00:00,occupancy,,,startup parked vehicles,,, ,
+00:00:10,crossing,left_to_right,car,,,,,
+00:00:25,parking,enter,car,,,,,
+00:00:40,parking_exit,exit,car,,,,,

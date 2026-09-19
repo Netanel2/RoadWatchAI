@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.RoadWatch" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/rw_bg</item>
+        <item name="android:navigationBarColor">@color/rw_bg</item>
+        <item name="android:windowBackground">@color/rw_bg</item>
+        <item name="colorPrimary">@color/rw_blue</item>
+        <item name="colorSecondary">@color/rw_green</item>
+        <item name="android:colorAccent">@color/rw_blue</item>
+    </style>
+</resources>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RoadWatch AI</string>
+    <string name="live">LIVE</string>
+    <string name="parked_now">חונים עכשיו</string>
+    <string name="moving_now">בתנועה עכשיו</string>
+    <string name="passed_today">עברו היום</string>
+    <string name="parked_today">חנו היום</string>
+    <string name="left_today">יצאו מחניה</string>
+    <string name="setup_zones">הגדרת אזורים</string>
+    <string name="reset_day">איפוס יום</string>
+    <string name="road_zone">סמן כביש</string>
+    <string name="parking_zone">סמן חניה</string>
+    <string name="count_line">קו ספירה</string>
+    <string name="save_setup">שמור כיול</string>
+    <string name="remove_last_parking">מחק חניה אחרונה</string>
+    <string name="clear_zones">נקה אזורים</string>
+    <string name="active_tracks">במעקב</string>
+</resources>

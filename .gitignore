@@ -1,0 +1,11 @@
+.gradle/
+.idea/
+local.properties
+*.iml
+build/
+app/build/
+.DS_Store
+.externalNativeBuild/
+.cxx/
+# Downloaded at build time; do not commit the generic model binary.
+app/src/main/assets/*.tflite

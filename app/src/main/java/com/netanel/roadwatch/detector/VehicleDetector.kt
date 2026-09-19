@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.os.SystemClock
 import androidx.camera.core.ImageProxy
@@ -173,7 +174,6 @@ class VehicleDetector(
             }
 
             val generalCandidates = generalDecoded.vehicles
-            val personDetections = generalDecoded.people
 
             val shouldRunAerial = aerial != null &&
                 (generalCandidates.isEmpty() || frameNumber % 2L == 0L)
@@ -191,6 +191,17 @@ class VehicleDetector(
                 aerialMs = 0L
                 aerialCandidates = emptyList()
             }
+
+            // V7: add one magnified overlapping tile per frame for small / distant people.
+            // The full-frame pass stays in place, but the tile makes pedestrians roughly
+            // 1.8x larger to YOLO. Four tiles are cycled, so the tracker receives a
+            // refreshed high-resolution observation of every part of the scene.
+            val tiledPeople = if (generalRunner != null) {
+                detectPeopleInTile(oriented, generalRunner, frameNumber)
+            } else {
+                emptyList()
+            }
+            val personDetections = nmsPeople(generalDecoded.people + tiledPeople, 0.42f, 30)
 
             val fused = fuse(generalCandidates + aerialCandidates)
                 .map { Detection(it.box, it.vehicleClass, it.confidence) }
@@ -328,6 +339,68 @@ class VehicleDetector(
             modelWidth = modelWidth,
             modelHeight = modelHeight
         )
+    }
+
+    private fun letterboxRegion(
+        oriented: Bitmap,
+        region: Box,
+        modelWidth: Int,
+        modelHeight: Int
+    ): Letterbox {
+        ensureModelBuffers(modelWidth, modelHeight)
+        val target = modelBitmap ?: error("Model bitmap unavailable")
+        val canvas = Canvas(target)
+        canvas.drawColor(Color.rgb(114, 114, 114))
+
+        val srcLeft = (region.left * oriented.width).coerceIn(0f, oriented.width.toFloat())
+        val srcTop = (region.top * oriented.height).coerceIn(0f, oriented.height.toFloat())
+        val srcRight = (region.right * oriented.width).coerceIn(srcLeft + 1f, oriented.width.toFloat())
+        val srcBottom = (region.bottom * oriented.height).coerceIn(srcTop + 1f, oriented.height.toFloat())
+        val cropWidth = (srcRight - srcLeft).coerceAtLeast(1f)
+        val cropHeight = (srcBottom - srcTop).coerceAtLeast(1f)
+
+        val gain = min(modelWidth / cropWidth, modelHeight / cropHeight)
+        val drawW = cropWidth * gain
+        val drawH = cropHeight * gain
+        val padX = (modelWidth - drawW) * 0.5f
+        val padY = (modelHeight - drawH) * 0.5f
+        canvas.drawBitmap(
+            oriented,
+            Rect(srcLeft.toInt(), srcTop.toInt(), srcRight.toInt(), srcBottom.toInt()),
+            RectF(padX, padY, padX + drawW, padY + drawH),
+            bitmapPaint
+        )
+
+        return Letterbox(
+            gain = gain,
+            padX = padX,
+            padY = padY,
+            imageWidth = cropWidth.toInt().coerceAtLeast(1),
+            imageHeight = cropHeight.toInt().coerceAtLeast(1),
+            modelWidth = modelWidth,
+            modelHeight = modelHeight
+        )
+    }
+
+    private fun detectPeopleInTile(
+        oriented: Bitmap,
+        runner: LiteRtRunner,
+        frameIndex: Long
+    ): List<PersonDetection> {
+        val region = PERSON_TILES[(((frameIndex - 1L) % PERSON_TILES.size.toLong()).toInt())]
+        val tileTransform = letterboxRegion(oriented, region, runner.inputWidth, runner.inputHeight)
+        preparePixels(runner.inputWidth, runner.inputHeight)
+        val decoded = decodeGeneral(runner, runner.run(inputFor(runner)), tileTransform).people
+        return decoded.map { person ->
+            val b = person.box
+            val mapped = Box(
+                left = region.left + b.left * region.width,
+                top = region.top + b.top * region.height,
+                right = region.left + b.right * region.width,
+                bottom = region.top + b.bottom * region.height
+            ).clamp01()
+            PersonDetection(mapped, person.confidence)
+        }
     }
 
     private fun preparePixels(width: Int, height: Int) {
@@ -670,108 +743,182 @@ class VehicleDetector(
         val height = bitmap.height
         if (width < 120 || height < 120) return null
 
-        val xStart = (width * 0.02f).toInt()
-        val xEnd = (width * 0.98f).toInt().coerceAtLeast(xStart + 1)
-        val yStart = (height * 0.24f).toInt()
-        val yEnd = (height * 0.97f).toInt().coerceAtLeast(yStart + 1)
-        val step = 4
+        val xStart = (width * 0.03f).toInt()
+        val xEnd = (width * 0.97f).toInt().coerceAtLeast(xStart + 1)
+        val yStart = (height * 0.28f).toInt()
+        val yEnd = (height * 0.96f).toInt().coerceAtLeast(yStart + 1)
+        val step = 3
 
         val majorCount = if (scanRows) (yEnd - yStart) / step else (xEnd - xStart) / step
         val minorCount = if (scanRows) (xEnd - xStart) / step else (yEnd - yStart) / step
-        if (majorCount < 8 || minorCount < 8) return null
+        if (majorCount < 12 || minorCount < 12) return null
 
-        data class Band(val index: Int, val minMinor: Int, val maxMinor: Int, val score: Int)
-        val rawBands = mutableListOf<Band>()
-        val threshold = max(4, (minorCount * 0.055f).toInt())
+        data class Band(val index: Int, val start: Int, val end: Int, val length: Int)
+        val bands = mutableListOf<Band>()
 
+        // V7 deliberately looks for one CONTIGUOUS neutral-white run on each scan
+        // line. V6 counted every bright pixel on a row, which merged curbs + lane
+        // markings into one enormous fake crosswalk.
         for (major in 0 until majorCount) {
-            var score = 0
-            var minMinor = Int.MAX_VALUE
-            var maxMinor = Int.MIN_VALUE
+            var bestStart = -1
+            var bestEnd = -1
+            var bestLength = 0
+            var runStart = -1
+            var lastWhite = -1
+            var gap = 0
+
+            fun finishRun() {
+                if (runStart >= 0 && lastWhite >= runStart) {
+                    val len = lastWhite - runStart + 1
+                    if (len > bestLength) {
+                        bestLength = len
+                        bestStart = runStart
+                        bestEnd = lastWhite
+                    }
+                }
+                runStart = -1
+                lastWhite = -1
+                gap = 0
+            }
+
             for (minor in 0 until minorCount) {
                 val x = if (scanRows) xStart + minor * step else xStart + major * step
                 val y = if (scanRows) yStart + major * step else yStart + minor * step
-                val pixel = bitmap.getPixel(x.coerceIn(0, width - 1), y.coerceIn(0, height - 1))
-                if (isWhiteLike(pixel)) {
-                    score++
-                    minMinor = min(minMinor, minor)
-                    maxMinor = max(maxMinor, minor)
+                val white = isWhiteLike(bitmap.getPixel(x.coerceIn(0, width - 1), y.coerceIn(0, height - 1)))
+                if (white) {
+                    if (runStart < 0) runStart = minor
+                    lastWhite = minor
+                    gap = 0
+                } else if (runStart >= 0) {
+                    gap++
+                    if (gap > 1) finishRun()
                 }
             }
-            if (score >= threshold && minMinor <= maxMinor) {
-                rawBands += Band(major, minMinor, maxMinor, score)
+            finishRun()
+
+            if (bestLength >= 5) {
+                val ratio = bestLength.toFloat() / minorCount
+                if (ratio in 0.055f..0.48f) {
+                    bands += Band(major, bestStart, bestEnd, bestLength)
+                }
             }
         }
-        if (rawBands.size < 4) return null
+        if (bands.size < 6) return null
 
-        // Collapse adjacent scan lines into one physical white stripe.
-        data class Stripe(var first: Int, var last: Int, var minMinor: Int, var maxMinor: Int, var peak: Int)
+        data class Stripe(
+            var first: Int,
+            var last: Int,
+            var start: Int,
+            var end: Int,
+            var centerMinor: Float,
+            var peak: Int
+        )
+
         val stripes = mutableListOf<Stripe>()
-        for (band in rawBands) {
+        for (band in bands) {
+            val center = (band.start + band.end) * 0.5f
             val last = stripes.lastOrNull()
-            if (last != null && band.index - last.last <= 2) {
+            val similarCenter = last != null && kotlin.math.abs(center - last.centerMinor) <= max(8f, band.length * 0.60f)
+            if (last != null && band.index - last.last <= 2 && similarCenter) {
                 last.last = band.index
-                last.minMinor = min(last.minMinor, band.minMinor)
-                last.maxMinor = max(last.maxMinor, band.maxMinor)
-                last.peak = max(last.peak, band.score)
+                last.start = min(last.start, band.start)
+                last.end = max(last.end, band.end)
+                last.centerMinor = (last.centerMinor + center) * 0.5f
+                last.peak = max(last.peak, band.length)
             } else {
-                stripes += Stripe(band.index, band.index, band.minMinor, band.maxMinor, band.score)
+                stripes += Stripe(band.index, band.index, band.start, band.end, center, band.length)
             }
         }
         if (stripes.size < 4) return null
 
-        // Find the densest group of repeated stripes. Real zebra crossings produce
-        // several nearby parallel bands, unlike a single lane marking or curb.
-        var best: List<Stripe> = emptyList()
-        var bestScore = -1f
+        fun median(values: List<Float>): Float {
+            if (values.isEmpty()) return 0f
+            val sorted = values.sorted()
+            val mid = sorted.size / 2
+            return if (sorted.size % 2 == 1) sorted[mid] else (sorted[mid - 1] + sorted[mid]) * 0.5f
+        }
+
+        var bestBox: Box? = null
+        var bestScore = Float.NEGATIVE_INFINITY
+        var bestStripeCount = 0
+        var bestOverlap = 0f
+
         for (start in stripes.indices) {
-            for (end in start until min(stripes.lastIndex, start + 8) + 1) {
+            val maxEnd = min(stripes.lastIndex, start + 8)
+            for (end in (start + 3)..maxEnd) {
+                if (end > stripes.lastIndex) break
                 val group = stripes.subList(start, end + 1)
-                if (group.size < 4) continue
-                val span = group.last().last - group.first().first + 1
-                if (span > majorCount * 0.42f) continue
-                val overlapLeft = group.maxOf { it.minMinor }
-                val overlapRight = group.minOf { it.maxMinor }
-                val overlap = overlapRight - overlapLeft + 1
-                val unionLeft = group.minOf { it.minMinor }
-                val unionRight = group.maxOf { it.maxMinor }
-                val union = unionRight - unionLeft + 1
-                if (union < minorCount * 0.08f) continue
-                val overlapRatio = if (union > 0) overlap.coerceAtLeast(0).toFloat() / union else 0f
-                val density = group.sumOf { it.peak }.toFloat() / (group.size * minorCount)
-                val score = group.size * 0.11f + overlapRatio * 0.45f + density * 1.7f
+                val majorCenters = group.map { (it.first + it.last) * 0.5f }
+                val gaps = majorCenters.zipWithNext { a, b -> b - a }
+                val medianGap = median(gaps)
+                if (medianGap < 2f || medianGap > majorCount * 0.14f) continue
+                val maxGapError = gaps.maxOfOrNull { kotlin.math.abs(it - medianGap) } ?: 0f
+                if (maxGapError > max(3f, medianGap * 0.65f)) continue
+
+                val widths = group.map { (it.end - it.start + 1).toFloat() }
+                val minWidth = widths.minOrNull() ?: continue
+                val maxWidth = widths.maxOrNull() ?: continue
+                if (minWidth / maxWidth < 0.35f) continue
+
+                val overlapStart = group.maxOf { it.start }
+                val overlapEnd = group.minOf { it.end }
+                val unionStart = group.minOf { it.start }
+                val unionEnd = group.maxOf { it.end }
+                val union = unionEnd - unionStart + 1
+                val overlap = (overlapEnd - overlapStart + 1).coerceAtLeast(0)
+                if (union < minorCount * 0.07f) continue
+                val overlapRatio = overlap.toFloat() / union
+                if (overlapRatio < 0.25f) continue
+
+                val majorFirst = group.first().first
+                val majorLast = group.last().last
+                val box = if (scanRows) {
+                    Box(
+                        left = (xStart + unionStart * step).toFloat() / width,
+                        top = (yStart + majorFirst * step).toFloat() / height,
+                        right = (xStart + (unionEnd + 1) * step).toFloat() / width,
+                        bottom = (yStart + (majorLast + 1) * step).toFloat() / height
+                    )
+                } else {
+                    Box(
+                        left = (xStart + majorFirst * step).toFloat() / width,
+                        top = (yStart + unionStart * step).toFloat() / height,
+                        right = (xStart + (majorLast + 1) * step).toFloat() / width,
+                        bottom = (yStart + (unionEnd + 1) * step).toFloat() / height
+                    )
+                }.clamp01()
+
+                // Reject the exact V6 failure mode: a curb / lane-marking band that
+                // stretches across most of the road. A zebra cluster should be local.
+                if (box.width < 0.08f || box.height < 0.035f) continue
+                if (box.width > 0.68f || box.height > 0.50f || box.area > 0.20f) continue
+
+                val centerY = box.center.y
+                val lowerSceneBonus = ((centerY - 0.35f).coerceAtLeast(0f) * 0.25f)
+                val widthConsistency = minWidth / maxWidth
+                val stripeWidthRatio = (widths.average().toFloat() / minorCount).coerceIn(0f, 1f)
+                val score = group.size * 0.12f +
+                    overlapRatio * 0.55f +
+                    widthConsistency * 0.22f +
+                    stripeWidthRatio * 0.80f +
+                    lowerSceneBonus
+
                 if (score > bestScore) {
                     bestScore = score
-                    best = group.toList()
+                    bestBox = box
+                    bestStripeCount = group.size
+                    bestOverlap = overlapRatio
                 }
             }
         }
-        if (best.size < 4) return null
 
-        val majorFirst = best.first().first
-        val majorLast = best.last().last
-        val minorFirst = best.minOf { it.minMinor }
-        val minorLast = best.maxOf { it.maxMinor }
-
-        val box = if (scanRows) {
-            Box(
-                left = (xStart + minorFirst * step).toFloat() / width,
-                top = (yStart + majorFirst * step).toFloat() / height,
-                right = (xStart + (minorLast + 1) * step).toFloat() / width,
-                bottom = (yStart + (majorLast + 1) * step).toFloat() / height
-            )
-        } else {
-            Box(
-                left = (xStart + majorFirst * step).toFloat() / width,
-                top = (yStart + minorFirst * step).toFloat() / height,
-                right = (xStart + (majorLast + 1) * step).toFloat() / width,
-                bottom = (yStart + (minorLast + 1) * step).toFloat() / height
-            )
-        }.clamp01()
-
-        if (box.width < 0.08f || box.height < 0.035f || box.area < 0.006f) return null
-        val stripeBonus = (best.size.coerceAtMost(8) - 4) * 0.07f
-        val confidence = (0.38f + stripeBonus + bestScore * 0.18f).coerceIn(0f, 0.96f)
+        val box = bestBox ?: return null
+        val confidence = (
+            0.43f +
+                (bestStripeCount.coerceAtMost(8) - 4) * 0.055f +
+                bestOverlap * 0.18f +
+                (bestScore - 0.70f).coerceIn(0f, 0.18f)
+            ).coerceIn(0f, 0.95f)
         return CrosswalkEstimate(box, confidence)
     }
 
@@ -974,8 +1121,16 @@ class VehicleDetector(
 
         private const val GENERAL_CONF = 0.30f
         private const val AERIAL_CONF = 0.34f
-        private const val PERSON_CONF = 0.22f
+        private const val PERSON_CONF = 0.18f
         private const val PERSON_CLASS_ID = 0
+
+        // Overlapping 2x2 scene tiles for the extra small-person pass.
+        private val PERSON_TILES = listOf(
+            Box(0.00f, 0.00f, 0.58f, 0.58f),
+            Box(0.42f, 0.00f, 1.00f, 0.58f),
+            Box(0.00f, 0.42f, 0.58f, 1.00f),
+            Box(0.42f, 0.42f, 1.00f, 1.00f)
+        )
 
         private val COCO_VEHICLE_IDS = intArrayOf(2, 3, 5, 7)
         private const val DOTA_LARGE_VEHICLE = 9

@@ -16,7 +16,7 @@ class PedestrianYieldEngine {
     ): Result {
         val confirmedPeople = personTracks.filter {
             val fresh = nowMs - it.lastSeenMs <= 900L
-            val enoughHits = it.hits >= if (it.confidence >= 0.34f) 2 else 3
+            val enoughHits = it.hits >= if (it.confidence >= 0.30f) 2 else 3
             fresh && enoughHits
         }
 

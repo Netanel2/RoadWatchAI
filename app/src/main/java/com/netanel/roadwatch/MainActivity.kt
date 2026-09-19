@@ -152,6 +152,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
             dailyStore.clear()
             vehicleTracker.reset()
             personTracker.reset()
+            crosswalkLock.reset()
             lastPersistedDaily = stateEngine.dailyCounts()
             lastMetrics = DashboardMetrics()
             updateDashboard(lastMetrics, null, null)
@@ -188,7 +189,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     }
 
     private fun prepareModel() {
-        setStatus("מאתחל V6 Scene AI...")
+        setStatus("מאתחל V7 Scene AI...")
         cameraExecutor.execute { detector.initialize() }
     }
 
@@ -221,7 +222,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
                     )
                     configureZoom(boundCamera!!)
                     txtLive.text = "LIVE"
-                    setStatus(if (detectorReady) "V6 · סורק סצנה" else "מצלמה פעילה · ממתין ל-AI")
+                    setStatus(if (detectorReady) "V7 · סורק סצנה" else "מצלמה פעילה · ממתין ל-AI")
                 } catch (t: Throwable) {
                     cameraStarted = false
                     setStatus("פתיחת מצלמה נכשלה: ${t.message}")
@@ -272,7 +273,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     override fun onReady(delegateName: String) {
         detectorReady = true
         delegateLabel = delegateName
-        runOnUiThread { setStatus("V6 מוכן ✓ לומד את הסצנה אוטומטית") }
+        runOnUiThread { setStatus("V7 מוכן ✓ לומד מעבר חציה ואנשים") }
     }
 
     override fun onResult(result: VehicleDetector.Result) {
@@ -314,8 +315,8 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
             txtStatus.text = when {
                 metrics.yieldRiskNow > 0 -> "⚠ חשד: רכב בתנועה ליד הולך רגל במעבר"
                 metrics.peopleInCrosswalkNow > 0 -> "מעבר פעיל · ${metrics.peopleInCrosswalkNow} חוצים"
-                crosswalkState.locked -> "V6 · מעבר חציה LOCKED · אנשים ${metrics.peopleNow}"
-                else -> "V6 · לומד מעבר חציה · ${crosswalkState.stableHits}/4"
+                crosswalkState.locked -> "V7 · מעבר חציה LOCKED · אנשים ${metrics.peopleNow}"
+                else -> "V7 · לומד מעבר חציה · ${crosswalkState.stableHits}/6"
             }
         }
     }
@@ -340,7 +341,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         txtActiveTracks.text = "רכבים ${metrics.activeTracks}"
         txtCrosswalkLock.text = when {
             crosswalkState?.locked == true -> "CROSSWALK LOCK ✓"
-            (crosswalkState?.stableHits ?: 0) > 0 -> "לומד מעבר ${crosswalkState?.stableHits}/4"
+            (crosswalkState?.stableHits ?: 0) > 0 -> "לומד מעבר ${crosswalkState?.stableHits}/6"
             else -> "מחפש מעבר חציה"
         }
 

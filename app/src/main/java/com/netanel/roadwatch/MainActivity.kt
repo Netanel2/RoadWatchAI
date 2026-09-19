@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
@@ -20,13 +21,11 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
-import com.netanel.roadwatch.core.Box
-import com.netanel.roadwatch.core.CrosswalkEstimate
+import com.netanel.roadwatch.core.CrosswalkLock
 import com.netanel.roadwatch.core.DashboardMetrics
 import com.netanel.roadwatch.core.DailyCounts
-import com.netanel.roadwatch.core.PersonDetection
-import com.netanel.roadwatch.core.TrackVisual
-import com.netanel.roadwatch.core.VehicleState
+import com.netanel.roadwatch.core.PedestrianYieldEngine
+import com.netanel.roadwatch.core.PersonTracker
 import com.netanel.roadwatch.core.VehicleStateEngine
 import com.netanel.roadwatch.core.VehicleTracker
 import com.netanel.roadwatch.detector.VehicleDetector
@@ -55,6 +54,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     private lateinit var txtPeopleNow: TextView
     private lateinit var txtCrosswalkNow: TextView
     private lateinit var txtYieldRisk: TextView
+    private lateinit var txtCrosswalkLock: TextView
     private lateinit var zoomSeek: SeekBar
     private lateinit var detailsPanel: LinearLayout
     private lateinit var bottomPanel: LinearLayout
@@ -66,8 +66,12 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     private var imageAnalysis: ImageAnalysis? = null
     private var boundCamera: Camera? = null
 
-    private val tracker = VehicleTracker()
+    private val vehicleTracker = VehicleTracker()
+    private val personTracker = PersonTracker()
     private val stateEngine = VehicleStateEngine()
+    private val crosswalkLock = CrosswalkLock()
+    private val pedestrianYieldEngine = PedestrianYieldEngine()
+
     private var detectorReady = false
     private var cameraStarted = false
     private var delegateLabel = "AI ממתין"
@@ -76,12 +80,6 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     private var zoomMin = 1f
     private var zoomMax = 1f
     private var syncingZoomUi = false
-
-    private data class SceneInsights(
-        val peopleNow: Int,
-        val peopleInCrosswalkNow: Int,
-        val yieldRiskNow: Int
-    )
 
     private val cameraPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -125,18 +123,20 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         txtPeopleNow = findViewById(R.id.txtPeopleNow)
         txtCrosswalkNow = findViewById(R.id.txtCrosswalkNow)
         txtYieldRisk = findViewById(R.id.txtYieldRisk)
+        txtCrosswalkLock = findViewById(R.id.txtCrosswalkLock)
         zoomSeek = findViewById(R.id.zoomSeek)
         detailsPanel = findViewById(R.id.detailsPanel)
         bottomPanel = findViewById(R.id.bottomPanel)
-
         previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
     }
 
     private fun applySafeInsets() {
-        val extraBottom = dp(12)
-        ViewCompat.setOnApplyWindowInsetsListener(bottomPanel) { v, insets ->
+        val baseMargin = dp(10)
+        ViewCompat.setOnApplyWindowInsetsListener(bottomPanel) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, bars.bottom + extraBottom)
+            val lp = view.layoutParams as FrameLayout.LayoutParams
+            lp.bottomMargin = bars.bottom + baseMargin
+            view.layoutParams = lp
             insets
         }
     }
@@ -150,9 +150,11 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         btnReset.setOnClickListener {
             stateEngine.resetDay()
             dailyStore.clear()
+            vehicleTracker.reset()
+            personTracker.reset()
             lastPersistedDaily = stateEngine.dailyCounts()
             lastMetrics = DashboardMetrics()
-            updateDashboard(lastMetrics, null)
+            updateDashboard(lastMetrics, null, null)
             setStatus("מוני היום אופסו · AUTO ממשיך לסרוק")
         }
 
@@ -186,7 +188,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     }
 
     private fun prepareModel() {
-        setStatus("מאתחל AUTO AI מקומי...")
+        setStatus("מאתחל V6 Scene AI...")
         cameraExecutor.execute { detector.initialize() }
     }
 
@@ -219,7 +221,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
                     )
                     configureZoom(boundCamera!!)
                     txtLive.text = "LIVE"
-                    setStatus(if (detectorReady) "AUTO · סורק את כל התמונה" else "מצלמה פעילה · ממתין ל-AI")
+                    setStatus(if (detectorReady) "V6 · סורק סצנה" else "מצלמה פעילה · ממתין ל-AI")
                 } catch (t: Throwable) {
                     cameraStarted = false
                     setStatus("פתיחת מצלמה נכשלה: ${t.message}")
@@ -239,12 +241,10 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
             updateZoomLabel(ratio)
         }
 
-        val state = camera.cameraInfo.zoomState.value
-        if (state != null) {
+        camera.cameraInfo.zoomState.value?.let { state ->
             zoomMin = state.minZoomRatio
             zoomMax = state.maxZoomRatio.coerceAtLeast(zoomMin)
-            val defaultRatio = 1f.coerceIn(zoomMin, zoomMax)
-            camera.cameraControl.setZoomRatio(defaultRatio)
+            camera.cameraControl.setZoomRatio(1f.coerceIn(zoomMin, zoomMax))
         }
     }
 
@@ -272,17 +272,26 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     override fun onReady(delegateName: String) {
         detectorReady = true
         delegateLabel = delegateName
-        runOnUiThread { setStatus("AUTO מוכן ✓ זיהוי רכבים, אנשים וסיוע למעבר חציה") }
+        runOnUiThread { setStatus("V6 מוכן ✓ לומד את הסצנה אוטומטית") }
     }
 
     override fun onResult(result: VehicleDetector.Result) {
-        val tracks = tracker.update(result.detections, result.timestampMs)
-        val (visuals, baseMetrics) = stateEngine.update(tracks, result.timestampMs)
-        val sceneInsights = analyzeScene(visuals, result.personDetections, result.crosswalk)
+        val vehicleTracks = vehicleTracker.update(result.detections, result.timestampMs)
+        val (vehicleVisuals, baseMetrics) = stateEngine.update(vehicleTracks, result.timestampMs)
+
+        val crosswalkState = crosswalkLock.update(result.crosswalk, result.timestampMs)
+        val personTracks = personTracker.update(result.personDetections, result.timestampMs)
+        val behavior = pedestrianYieldEngine.update(
+            personTracks = personTracks,
+            vehicleVisuals = vehicleVisuals,
+            crosswalk = crosswalkState.estimate,
+            nowMs = result.timestampMs
+        )
+
         val metrics = baseMetrics.copy(
-            peopleNow = sceneInsights.peopleNow,
-            peopleInCrosswalkNow = sceneInsights.peopleInCrosswalkNow,
-            yieldRiskNow = sceneInsights.yieldRiskNow
+            peopleNow = behavior.peopleNow,
+            peopleInCrosswalkNow = behavior.peopleInCrosswalkNow,
+            yieldRiskNow = behavior.yieldRiskNow
         )
 
         val daily = stateEngine.dailyCounts()
@@ -294,17 +303,19 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
 
         runOnUiThread {
             overlayView.setScene(
-                trackVisuals = visuals,
-                personDetections = result.personDetections,
-                crosswalkEstimate = result.crosswalk,
+                trackVisuals = vehicleVisuals,
+                personVisuals = behavior.people,
+                crosswalkEstimate = crosswalkState.estimate,
+                crosswalkLocked = crosswalkState.locked,
                 rotatedImageWidth = result.rotatedWidth,
                 rotatedImageHeight = result.rotatedHeight
             )
-            updateDashboard(metrics, result)
+            updateDashboard(metrics, result, crosswalkState)
             txtStatus.text = when {
-                metrics.yieldRiskNow > 0 -> "אזהרה · ${metrics.yieldRiskNow} רכב בתנועה ליד הולך רגל במעבר"
-                metrics.peopleInCrosswalkNow > 0 -> "מעבר חציה פעיל · ${metrics.peopleInCrosswalkNow} הולכי רגל"
-                else -> "AUTO · ${metrics.activeTracks} רכבים מאומתים · אנשים ${metrics.peopleNow}"
+                metrics.yieldRiskNow > 0 -> "⚠ חשד: רכב בתנועה ליד הולך רגל במעבר"
+                metrics.peopleInCrosswalkNow > 0 -> "מעבר פעיל · ${metrics.peopleInCrosswalkNow} חוצים"
+                crosswalkState.locked -> "V6 · מעבר חציה LOCKED · אנשים ${metrics.peopleNow}"
+                else -> "V6 · לומד מעבר חציה · ${crosswalkState.stableHits}/4"
             }
         }
     }
@@ -313,56 +324,35 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         runOnUiThread { setStatus(message) }
     }
 
-    private fun analyzeScene(
-        visuals: List<TrackVisual>,
-        people: List<PersonDetection>,
-        crosswalk: CrosswalkEstimate?
-    ): SceneInsights {
-        val crosswalkBox = crosswalk?.box
-        val peopleNow = people.size
-        if (crosswalkBox == null) {
-            return SceneInsights(peopleNow = peopleNow, peopleInCrosswalkNow = 0, yieldRiskNow = 0)
-        }
-
-        val personZone = crosswalkBox.expand(0.03f, 0.05f)
-        val crossingPeople = people.count { personZone.intersects(it.box) || personZone.contains(it.box.bottomCenter) }
-        val approachZone = crosswalkBox.expand(0.13f, 0.12f)
-        val riskyVehicles = if (crossingPeople > 0) {
-            visuals.count {
-                (it.state == VehicleState.MOVING || it.state == VehicleState.LEAVING || it.state == VehicleState.STOPPING) &&
-                    (approachZone.intersects(it.track.box) || approachZone.contains(it.track.bottomCenter))
-            }
-        } else 0
-
-        return SceneInsights(
-            peopleNow = peopleNow,
-            peopleInCrosswalkNow = crossingPeople,
-            yieldRiskNow = riskyVehicles
-        )
-    }
-
-    private val Box.bottomCenter get() = com.netanel.roadwatch.core.Vec2((left + right) * 0.5f, top + height * 0.93f)
-
-    private fun updateDashboard(metrics: DashboardMetrics, result: VehicleDetector.Result?) {
+    private fun updateDashboard(
+        metrics: DashboardMetrics,
+        result: VehicleDetector.Result?,
+        crosswalkState: CrosswalkLock.State?
+    ) {
         txtParkedNow.text = metrics.parkedNow.toString()
         txtMovingNow.text = metrics.movingNow.toString()
         txtPassedToday.text = metrics.passedToday.toString()
         txtParkedToday.text = metrics.parkedToday.toString()
         txtPeopleNow.text = "אנשים ${metrics.peopleNow}"
         txtCrosswalkNow.text = "במעבר ${metrics.peopleInCrosswalkNow}"
-        txtYieldRisk.text = "סיכון ${metrics.yieldRiskNow}"
+        txtYieldRisk.text = "חשד ${metrics.yieldRiskNow}"
         txtLeftToday.text = "יצאו ${metrics.leftParkingToday}"
-        txtActiveTracks.text = "במעקב ${metrics.activeTracks}"
+        txtActiveTracks.text = "רכבים ${metrics.activeTracks}"
+        txtCrosswalkLock.text = when {
+            crosswalkState?.locked == true -> "CROSSWALK LOCK ✓"
+            (crosswalkState?.stableHits ?: 0) > 0 -> "לומד מעבר ${crosswalkState?.stableHits}/4"
+            else -> "מחפש מעבר חציה"
+        }
 
         if (result == null) {
             txtDiagnostics.text = delegateLabel
             txtBreakdown.text = "מכוניות ${metrics.carsNow} · משאיות ${metrics.trucksNow} · אוטובוסים ${metrics.busesNow} · אופנועים ${metrics.motorcyclesNow}"
             return
         }
-        val crosswalkText = result.crosswalk?.let {
+        val crosswalkText = crosswalkState?.estimate?.let {
             " · מעבר ${(it.confidence * 100f).roundToInt()}%"
         } ?: " · מעבר --"
-        txtDiagnostics.text = "${result.engineLabel} · ${result.inferenceMs}ms · RAW ${result.detections.size} · אנשים ${result.personDetections.size}$crosswalkText"
+        txtDiagnostics.text = "${result.engineLabel} · ${result.inferenceMs}ms · רכבים RAW ${result.detections.size} · אנשים RAW ${result.personDetections.size}$crosswalkText"
         txtBreakdown.text = "Street ${result.generalVehicles} · Aerial ${result.aerialVehicles} · מכוניות ${metrics.carsNow} · משאיות ${metrics.trucksNow} · אוטובוסים ${metrics.busesNow} · אופנועים ${metrics.motorcyclesNow}"
     }
 

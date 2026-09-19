@@ -135,4 +135,68 @@ class CoreLogicTest {
         assertEquals(VehicleState.UNKNOWN, stale.first.first().state)
         assertEquals(0, stale.second.passedToday)
     }
+
+    @Test
+    fun personTrackerConfirmsSmallPedestrianAcrossFrames() {
+        val tracker = PersonTracker()
+        var now = 0L
+        val box1 = Box(.30f, .40f, .34f, .54f)
+        val box2 = Box(.305f, .40f, .345f, .54f)
+        tracker.update(listOf(PersonDetection(box1, .27f)), now)
+        now += 120
+        val second = tracker.update(listOf(PersonDetection(box2, .28f)), now)
+        assertEquals(1, second.size)
+        assertEquals(2, second.first().hits)
+        now += 120
+        val third = tracker.update(listOf(PersonDetection(box2, .30f)), now)
+        assertEquals(3, third.first().hits)
+    }
+
+    @Test
+    fun crosswalkLocksAfterStableRepeatedEstimates() {
+        val lock = CrosswalkLock(requiredStableHits = 3)
+        var now = 0L
+        val a = CrosswalkEstimate(Box(.10f, .65f, .45f, .80f), .65f)
+        val b = CrosswalkEstimate(Box(.11f, .65f, .46f, .80f), .68f)
+        assertTrue(!lock.update(a, now).locked)
+        now += 100
+        assertTrue(!lock.update(b, now).locked)
+        now += 100
+        val state = lock.update(a, now)
+        assertTrue(state.locked)
+        now += 5_000
+        assertTrue(lock.update(null, now).locked)
+    }
+
+    @Test
+    fun crossingPersonCreatesYieldRiskNearMovingVehicle() {
+        val engine = PedestrianYieldEngine()
+        val crosswalk = CrosswalkEstimate(Box(.30f, .50f, .60f, .68f), .8f)
+        val person = PersonTrackSnapshot(
+            id = 1,
+            box = Box(.40f, .48f, .46f, .64f),
+            confidence = .8f,
+            speed = .01f,
+            velocity = Vec2(0f, 0f),
+            ageMs = 500L,
+            lastSeenMs = 1000L,
+            hits = 4
+        )
+        val vehicleTrack = TrackSnapshot(
+            id = 2,
+            box = Box(.55f, .62f, .70f, .75f),
+            vehicleClass = VehicleClass.CAR,
+            confidence = .9f,
+            speed = .08f,
+            velocity = Vec2(-.05f, 0f),
+            ageMs = 1000L,
+            lastSeenMs = 1000L,
+            hits = 6
+        )
+        val vehicle = TrackVisual(vehicleTrack, VehicleState.MOVING, 900L)
+        val result = engine.update(listOf(person), listOf(vehicle), crosswalk, 1000L)
+        assertEquals(1, result.peopleInCrosswalkNow)
+        assertEquals(1, result.yieldRiskNow)
+    }
+
 }

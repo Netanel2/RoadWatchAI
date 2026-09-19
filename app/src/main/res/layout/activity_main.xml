@@ -49,7 +49,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="V5 · PEOPLE + CROSSWALK ASSIST"
+                    android:text="V6 · SMART YIELD DETECTION"
                     android:textColor="@color/rw_blue"
                     android:textSize="9sp"
                     android:textStyle="bold" />
@@ -59,9 +59,19 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:text="מאתחל AUTO AI..."
+                    android:text="מאתחל V6 Scene AI..."
                     android:textColor="@color/rw_muted"
                     android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/txtCrosswalkLock"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxLines="1"
+                    android:text="מחפש מעבר חציה"
+                    android:textColor="@color/rw_green"
+                    android:textSize="9sp"
+                    android:textStyle="bold" />
             </LinearLayout>
 
             <LinearLayout
@@ -89,21 +99,11 @@
                     android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/bottomPanel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:layout_marginStart="8dp"
-        android:layout_marginEnd="8dp"
-        android:layout_marginBottom="6dp"
-        android:orientation="vertical">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="56dp"
+            android:layout_marginTop="8dp"
             android:orientation="horizontal"
             android:weightSum="4">
 
@@ -157,11 +157,21 @@
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="חנו היום" android:textColor="@color/rw_muted" android:textSize="10sp" />
             </LinearLayout>
         </LinearLayout>
+    </LinearLayout>
+
+    <!-- V6 bottom controls are moved above Android navigation using WindowInsets. -->
+    <LinearLayout
+        android:id="@+id/bottomPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:orientation="vertical">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="34dp"
-            android:layout_marginTop="5dp"
             android:background="@drawable/panel_bg"
             android:gravity="center_vertical"
             android:orientation="horizontal"
@@ -195,7 +205,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:gravity="end"
-                android:text="סיכון 0"
+                android:text="חשד 0"
                 android:textColor="@color/rw_amber"
                 android:textSize="11sp"
                 android:textStyle="bold" />
@@ -297,7 +307,7 @@
                 android:layout_height="28dp"
                 android:orientation="horizontal">
                 <TextView android:id="@+id/txtLeftToday" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center_vertical" android:text="יצאו 0" android:textColor="@color/rw_muted" android:textSize="10sp" android:textStyle="bold" />
-                <TextView android:id="@+id/txtActiveTracks" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center_vertical|end" android:text="במעקב 0" android:textColor="@color/rw_muted" android:textSize="10sp" android:textStyle="bold" />
+                <TextView android:id="@+id/txtActiveTracks" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center_vertical|end" android:text="רכבים 0" android:textColor="@color/rw_muted" android:textSize="10sp" android:textStyle="bold" />
             </LinearLayout>
 
             <TextView

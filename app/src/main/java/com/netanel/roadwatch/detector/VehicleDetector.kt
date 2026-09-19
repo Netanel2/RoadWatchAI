@@ -632,7 +632,10 @@ class VehicleDetector(
         val aspect = box.width / max(0.0001f, box.height)
         if (box.area < 0.00010f || box.area > 0.45f) return false
         if (aspect < 0.42f || aspect > 5.8f) return false
-        if (confidence < 0.40f && box.area < 0.0011f) return false
+        // V6: very weak tiny detections are a common source of "electrical box = car" errors.
+        // Keep 0.30-0.32 detections available only when the object occupies enough pixels;
+        // the tracker separately requires >=0.32 to create a new vehicle track.
+        if (confidence < 0.34f && box.area < 0.0010f) return false
         if (vehicleClass == VehicleClass.BUS || vehicleClass == VehicleClass.TRUCK) {
             if (box.area < 0.00022f) return false
         }
@@ -641,95 +644,134 @@ class VehicleDetector(
 
     private fun personShapePlausible(box: Box, confidence: Float): Boolean {
         val aspect = box.width / max(0.0001f, box.height)
-        if (box.area < 0.00008f || box.area > 0.20f) return false
-        if (aspect < 0.16f || aspect > 1.25f) return false
-        if (confidence < 0.45f && box.area < 0.00025f) return false
+        // People are often tiny from Netanel's high street camera. V6 lowers the
+        // detector floor and lets the temporal PersonTracker decide whether a weak
+        // detection is real across multiple frames.
+        if (box.area < 0.000035f || box.area > 0.20f) return false
+        if (aspect < 0.12f || aspect > 1.45f) return false
+        if (confidence < 0.28f && box.area < 0.000070f) return false
         return true
     }
 
+    /**
+     * Best-effort zebra-crossing estimator. It searches for repeated bright stripe
+     * bands in BOTH image axes, so steep/rotated camera angles are supported better
+     * than the V5 row-only detector. The result is intentionally stabilized by
+     * CrosswalkLock before it is used by behavior logic.
+     */
     private fun estimateCrosswalk(bitmap: Bitmap): CrosswalkEstimate? {
+        val horizontal = estimateStripeCluster(bitmap, scanRows = true)
+        val vertical = estimateStripeCluster(bitmap, scanRows = false)
+        return listOfNotNull(horizontal, vertical).maxByOrNull { it.confidence }
+    }
+
+    private fun estimateStripeCluster(bitmap: Bitmap, scanRows: Boolean): CrosswalkEstimate? {
         val width = bitmap.width
         val height = bitmap.height
         if (width < 120 || height < 120) return null
 
-        val yStart = (height * 0.35f).toInt()
-        val yEnd = (height * 0.92f).toInt().coerceAtLeast(yStart + 1)
-        val xStart = (width * 0.06f).toInt()
-        val xEnd = (width * 0.94f).toInt().coerceAtLeast(xStart + 1)
+        val xStart = (width * 0.02f).toInt()
+        val xEnd = (width * 0.98f).toInt().coerceAtLeast(xStart + 1)
+        val yStart = (height * 0.24f).toInt()
+        val yEnd = (height * 0.97f).toInt().coerceAtLeast(yStart + 1)
         val step = 4
-        val rows = ((yEnd - yStart) / step).coerceAtLeast(1)
-        val cols = ((xEnd - xStart) / step).coerceAtLeast(1)
-        val rowScores = IntArray(rows)
-        val colScores = IntArray(cols)
-        val bandMask = BooleanArray(rows)
 
-        for (ri in 0 until rows) {
-            val y = yStart + ri * step
+        val majorCount = if (scanRows) (yEnd - yStart) / step else (xEnd - xStart) / step
+        val minorCount = if (scanRows) (xEnd - xStart) / step else (yEnd - yStart) / step
+        if (majorCount < 8 || minorCount < 8) return null
+
+        data class Band(val index: Int, val minMinor: Int, val maxMinor: Int, val score: Int)
+        val rawBands = mutableListOf<Band>()
+        val threshold = max(4, (minorCount * 0.055f).toInt())
+
+        for (major in 0 until majorCount) {
             var score = 0
-            for (ci in 0 until cols) {
-                val x = xStart + ci * step
+            var minMinor = Int.MAX_VALUE
+            var maxMinor = Int.MIN_VALUE
+            for (minor in 0 until minorCount) {
+                val x = if (scanRows) xStart + minor * step else xStart + major * step
+                val y = if (scanRows) yStart + major * step else yStart + minor * step
                 val pixel = bitmap.getPixel(x.coerceIn(0, width - 1), y.coerceIn(0, height - 1))
                 if (isWhiteLike(pixel)) {
                     score++
+                    minMinor = min(minMinor, minor)
+                    maxMinor = max(maxMinor, minor)
                 }
             }
-            rowScores[ri] = score
-        }
-
-        val rowThreshold = max(6, (cols * 0.22f).toInt())
-        for (ri in rowScores.indices) {
-            val prev = rowScores.getOrElse(ri - 1) { rowScores[ri] }
-            val cur = rowScores[ri]
-            val next = rowScores.getOrElse(ri + 1) { rowScores[ri] }
-            val smoothed = (prev + cur + next) / 3
-            if (smoothed >= rowThreshold) bandMask[ri] = true
-        }
-
-        val bands = mutableListOf<IntRange>()
-        var startBand = -1
-        for (i in bandMask.indices) {
-            if (bandMask[i] && startBand < 0) startBand = i
-            val end = i == bandMask.lastIndex || !bandMask.getOrElse(i + 1) { false }
-            if (startBand >= 0 && end) {
-                if (i - startBand >= 1) bands += startBand..i
-                startBand = -1
+            if (score >= threshold && minMinor <= maxMinor) {
+                rawBands += Band(major, minMinor, maxMinor, score)
             }
         }
-        if (bands.size < 3) return null
+        if (rawBands.size < 4) return null
 
-        val chosen = bands.takeLast(6)
-        for (band in chosen) {
-            for (ri in band) {
-                val y = yStart + ri * step
-                for (ci in 0 until cols) {
-                    val x = xStart + ci * step
-                    val pixel = bitmap.getPixel(x.coerceIn(0, width - 1), y.coerceIn(0, height - 1))
-                    if (isWhiteLike(pixel)) colScores[ci]++
+        // Collapse adjacent scan lines into one physical white stripe.
+        data class Stripe(var first: Int, var last: Int, var minMinor: Int, var maxMinor: Int, var peak: Int)
+        val stripes = mutableListOf<Stripe>()
+        for (band in rawBands) {
+            val last = stripes.lastOrNull()
+            if (last != null && band.index - last.last <= 2) {
+                last.last = band.index
+                last.minMinor = min(last.minMinor, band.minMinor)
+                last.maxMinor = max(last.maxMinor, band.maxMinor)
+                last.peak = max(last.peak, band.score)
+            } else {
+                stripes += Stripe(band.index, band.index, band.minMinor, band.maxMinor, band.score)
+            }
+        }
+        if (stripes.size < 4) return null
+
+        // Find the densest group of repeated stripes. Real zebra crossings produce
+        // several nearby parallel bands, unlike a single lane marking or curb.
+        var best: List<Stripe> = emptyList()
+        var bestScore = -1f
+        for (start in stripes.indices) {
+            for (end in start until min(stripes.lastIndex, start + 8) + 1) {
+                val group = stripes.subList(start, end + 1)
+                if (group.size < 4) continue
+                val span = group.last().last - group.first().first + 1
+                if (span > majorCount * 0.42f) continue
+                val overlapLeft = group.maxOf { it.minMinor }
+                val overlapRight = group.minOf { it.maxMinor }
+                val overlap = overlapRight - overlapLeft + 1
+                val unionLeft = group.minOf { it.minMinor }
+                val unionRight = group.maxOf { it.maxMinor }
+                val union = unionRight - unionLeft + 1
+                if (union < minorCount * 0.08f) continue
+                val overlapRatio = if (union > 0) overlap.coerceAtLeast(0).toFloat() / union else 0f
+                val density = group.sumOf { it.peak }.toFloat() / (group.size * minorCount)
+                val score = group.size * 0.11f + overlapRatio * 0.45f + density * 1.7f
+                if (score > bestScore) {
+                    bestScore = score
+                    best = group.toList()
                 }
             }
         }
+        if (best.size < 4) return null
 
-        val colThreshold = max(2, (chosen.size * 0.45f).toInt())
-        var leftIdx = -1
-        var rightIdx = -1
-        for (i in colScores.indices) {
-            if (colScores[i] >= colThreshold) {
-                if (leftIdx < 0) leftIdx = i
-                rightIdx = i
-            }
-        }
-        if (leftIdx < 0 || rightIdx <= leftIdx) return null
+        val majorFirst = best.first().first
+        val majorLast = best.last().last
+        val minorFirst = best.minOf { it.minMinor }
+        val minorLast = best.maxOf { it.maxMinor }
 
-        val topRow = chosen.first().first
-        val bottomRow = chosen.last().last
-        val left = (xStart + leftIdx * step).toFloat() / width
-        val right = (xStart + (rightIdx + 1) * step).toFloat() / width
-        val top = (yStart + topRow * step).toFloat() / height
-        val bottom = (yStart + (bottomRow + 1) * step).toFloat() / height
-        val box = Box(left, top, right, bottom).clamp01()
+        val box = if (scanRows) {
+            Box(
+                left = (xStart + minorFirst * step).toFloat() / width,
+                top = (yStart + majorFirst * step).toFloat() / height,
+                right = (xStart + (minorLast + 1) * step).toFloat() / width,
+                bottom = (yStart + (majorLast + 1) * step).toFloat() / height
+            )
+        } else {
+            Box(
+                left = (xStart + majorFirst * step).toFloat() / width,
+                top = (yStart + minorFirst * step).toFloat() / height,
+                right = (xStart + (majorLast + 1) * step).toFloat() / width,
+                bottom = (yStart + (minorLast + 1) * step).toFloat() / height
+            )
+        }.clamp01()
 
-        if (box.width < 0.10f || box.height < 0.04f) return null
-        val confidence = (0.32f + chosen.size * 0.06f + box.width * 0.22f).coerceIn(0f, 0.95f)
+        if (box.width < 0.08f || box.height < 0.035f || box.area < 0.006f) return null
+        val stripeBonus = (best.size.coerceAtMost(8) - 4) * 0.07f
+        val confidence = (0.38f + stripeBonus + bestScore * 0.18f).coerceIn(0f, 0.96f)
         return CrosswalkEstimate(box, confidence)
     }
 
@@ -740,7 +782,9 @@ class VehicleDetector(
         val maxRgb = max(r, max(g, b))
         val minRgb = min(r, min(g, b))
         val brightness = (r + g + b) / 3
-        return brightness >= 155 && maxRgb - minRgb <= 42
+        // Night mode: accept moderately bright neutral paint, but reject strongly
+        // colored lamps and red/white curb paint as much as possible.
+        return brightness >= 138 && maxRgb - minRgb <= 48
     }
 
     private fun cocoVehicleClass(classId: Int): VehicleClass? = when (classId) {
@@ -929,8 +973,8 @@ class VehicleDetector(
         const val AERIAL_MODEL = "yolo26n_obb_w8a32.tflite"
 
         private const val GENERAL_CONF = 0.30f
-        private const val AERIAL_CONF = 0.32f
-        private const val PERSON_CONF = 0.34f
+        private const val AERIAL_CONF = 0.34f
+        private const val PERSON_CONF = 0.22f
         private const val PERSON_CLASS_ID = 0
 
         private val COCO_VEHICLE_IDS = intArrayOf(2, 3, 5, 7)

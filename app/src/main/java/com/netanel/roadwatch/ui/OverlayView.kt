@@ -11,7 +11,8 @@ import android.util.AttributeSet
 import android.view.View
 import com.netanel.roadwatch.core.Box
 import com.netanel.roadwatch.core.CrosswalkEstimate
-import com.netanel.roadwatch.core.PersonDetection
+import com.netanel.roadwatch.core.PersonState
+import com.netanel.roadwatch.core.PersonVisual
 import com.netanel.roadwatch.core.TrackVisual
 import com.netanel.roadwatch.core.Vec2
 import com.netanel.roadwatch.core.VehicleState
@@ -23,8 +24,9 @@ class OverlayView @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     private var visuals: List<TrackVisual> = emptyList()
-    private var people: List<PersonDetection> = emptyList()
+    private var people: List<PersonVisual> = emptyList()
     private var crosswalk: CrosswalkEstimate? = null
+    private var crosswalkLocked = false
     private var imageWidth = 1
     private var imageHeight = 1
 
@@ -34,18 +36,16 @@ class OverlayView @JvmOverloads constructor(
     }
     private val personPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.rgb(255, 210, 74)
-        strokeWidth = dp(2f)
+        strokeWidth = dp(2.2f)
     }
     private val crosswalkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.rgb(80, 231, 219)
-        strokeWidth = dp(2f)
+        strokeWidth = dp(2.4f)
         pathEffect = DashPathEffect(floatArrayOf(dp(8f), dp(6f)), 0f)
     }
     private val labelBg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.argb(205, 8, 15, 24)
+        color = Color.argb(210, 8, 15, 24)
     }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
@@ -58,14 +58,16 @@ class OverlayView @JvmOverloads constructor(
 
     fun setScene(
         trackVisuals: List<TrackVisual>,
-        personDetections: List<PersonDetection>,
+        personVisuals: List<PersonVisual>,
         crosswalkEstimate: CrosswalkEstimate?,
+        crosswalkLocked: Boolean,
         rotatedImageWidth: Int,
         rotatedImageHeight: Int
     ) {
         visuals = trackVisuals
-        people = personDetections
+        people = personVisuals
         crosswalk = crosswalkEstimate
+        this.crosswalkLocked = crosswalkLocked
         imageWidth = rotatedImageWidth.coerceAtLeast(1)
         imageHeight = rotatedImageHeight.coerceAtLeast(1)
         invalidate()
@@ -77,17 +79,27 @@ class OverlayView @JvmOverloads constructor(
 
         crosswalk?.let { estimate ->
             val rect = boxToView(estimate.box)
+            crosswalkPaint.color = if (crosswalkLocked) Color.rgb(80, 231, 219) else Color.rgb(125, 176, 210)
             val path = Path().apply { addRoundRect(rect, dp(8f), dp(8f), Path.Direction.CW) }
             canvas.drawPath(path, crosswalkPaint)
             val conf = (estimate.confidence * 100f).toInt().coerceIn(0, 100)
-            drawLabel(canvas, "מעבר חציה · ${conf}%", rect.left, rect.top, Color.rgb(80, 231, 219))
+            val mode = if (crosswalkLocked) "LOCK ✓" else "לומד"
+            drawLabel(canvas, "מעבר חציה · $mode · ${conf}%", rect.left, rect.top, crosswalkPaint.color)
         }
 
         people.forEach { person ->
-            val rect = boxToView(person.box)
+            val rect = boxToView(person.track.box)
+            val color = when (person.state) {
+                PersonState.CROSSING -> Color.rgb(255, 91, 91)
+                PersonState.WAITING -> Color.rgb(255, 191, 72)
+                PersonState.APPROACHING -> Color.rgb(255, 220, 92)
+                PersonState.LEAVING -> Color.rgb(184, 132, 255)
+                PersonState.OTHER -> Color.rgb(255, 210, 74)
+            }
+            personPaint.color = color
             canvas.drawRoundRect(rect, dp(6f), dp(6f), personPaint)
-            val conf = (person.confidence * 100f).toInt().coerceIn(0, 100)
-            drawLabel(canvas, "אדם · ${conf}%", rect.left, rect.top, personPaint.color)
+            val conf = (person.track.confidence * 100f).toInt().coerceIn(0, 100)
+            drawLabel(canvas, "אדם #${person.track.id} · ${person.state.he} · ${conf}%", rect.left, rect.top, color)
         }
 
         visuals.forEach { visual ->

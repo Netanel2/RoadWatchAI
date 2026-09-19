@@ -26,6 +26,14 @@ enum class VehicleState(val he: String) {
     UNKNOWN("נבדק")
 }
 
+enum class PersonState(val he: String) {
+    APPROACHING("מתקרב"),
+    WAITING("ממתין"),
+    CROSSING("חוצה"),
+    LEAVING("מתרחק"),
+    OTHER("הולך רגל")
+}
+
 data class Detection(
     val box: Box,
     val vehicleClass: VehicleClass,
@@ -60,6 +68,24 @@ data class TrackVisual(
     val track: TrackSnapshot,
     val state: VehicleState,
     val stateSinceMs: Long
+)
+
+data class PersonTrackSnapshot(
+    val id: Int,
+    val box: Box,
+    val confidence: Float,
+    val speed: Float,
+    val velocity: Vec2,
+    val ageMs: Long,
+    val lastSeenMs: Long,
+    val hits: Int
+) {
+    val bottomCenter: Vec2 get() = box.bottomCenter
+}
+
+data class PersonVisual(
+    val track: PersonTrackSnapshot,
+    val state: PersonState
 )
 
 data class ZoneConfig(

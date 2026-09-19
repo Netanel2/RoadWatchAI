@@ -11,8 +11,8 @@ android {
         applicationId = "com.netanel.roadwatch"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "5.0.0-beta"
+        versionCode = 6
+        versionName = "6.0.0-beta"
     }
 
     buildTypes {

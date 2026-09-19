@@ -68,37 +68,3 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
 }
-
-
-val aiModelUrl = "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/int8/1/efficientdet_lite2.tflite"
-val aiModelFile = layout.projectDirectory.file("src/main/assets/efficientdet_lite2_int8.tflite")
-
-val downloadAiModel = tasks.register("downloadAiModel") {
-    outputs.file(aiModelFile)
-    doLast {
-        val target = aiModelFile.asFile
-        if (!target.exists() || target.length() < 2_000_000L) {
-            target.parentFile.mkdirs()
-            val temp = File(target.parentFile, target.name + ".download")
-            if (temp.exists()) temp.delete()
-            val connection = java.net.URI.create(aiModelUrl).toURL().openConnection().apply {
-                connectTimeout = 20_000
-                readTimeout = 60_000
-            }
-            connection.getInputStream().use { input ->
-                temp.outputStream().use { output -> input.copyTo(output) }
-            }
-            require(temp.length() >= 2_000_000L) { "Downloaded AI model is unexpectedly small" }
-            if (target.exists()) target.delete()
-            check(temp.renameTo(target) || run {
-                temp.copyTo(target, overwrite = true)
-                temp.delete()
-                true
-            })
-        }
-    }
-}
-
-tasks.matching { it.name == "preBuild" }.configureEach {
-    dependsOn(downloadAiModel)
-}

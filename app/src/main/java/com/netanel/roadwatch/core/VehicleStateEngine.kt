@@ -79,7 +79,7 @@ class VehicleStateEngine(
         memory.keys.filter { it !in activeIds }.toList().forEach(memory::remove)
 
         val visuals = tracks
-            .filter { it.hits >= 2 }
+            .filter { it.hits >= 3 }
             .map { track -> updateTrack(track, zones, nowMs) }
 
         // Visualize every confirmed AI track for debugging, but dashboard counts are

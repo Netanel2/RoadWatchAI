@@ -240,10 +240,34 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     }
 
     override fun onResult(result: VehicleDetector.Result) {
-        // Track every AI vehicle first. Zone filtering belongs to the state/counting
-        // layer, not the detector layer. This preserves IDs while a car enters/leaves
-        // a marked road or parking area and also makes detector debugging truthful.
-        val tracks = tracker.update(result.detections, result.timestampMs)
+        // V3 accuracy gate: the detector may inspect the full frame for diagnostics,
+        // but only detections whose bottom-center is inside a user-defined road or
+        // parking ROI are allowed to create tracks, states or counters.
+        val hasAnalysisZone = zones.road.isValid() || zones.parkingZones.any { it.isValid() }
+
+        if (!hasAnalysisZone) {
+            tracker.reset()
+            stateEngine.resetTrackingState()
+            lastMetrics = DashboardMetrics()
+            runOnUiThread {
+                overlayView.setScene(
+                    trackVisuals = emptyList(),
+                    zoneConfig = zones,
+                    rotatedImageWidth = result.rotatedWidth,
+                    rotatedImageHeight = result.rotatedHeight
+                )
+                updateDashboard(lastMetrics, result, 0)
+                txtStatus.text = "AI מוכן · סמן כביש או חניה כדי להתחיל"
+            }
+            return
+        }
+
+        val zoneDetections = result.detections.filter { detection ->
+            val point = detection.box.bottomCenter
+            zones.road.contains(point) || zones.isInParking(point)
+        }
+
+        val tracks = tracker.update(zoneDetections, result.timestampMs)
         val (visuals, metrics) = stateEngine.update(tracks, zones, result.timestampMs)
         val daily = stateEngine.dailyCounts()
         if (daily != lastPersistedDaily) {
@@ -252,15 +276,6 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         }
         lastMetrics = metrics
 
-        val inZoneDetections = if (zones.road.isValid() || zones.parkingZones.isNotEmpty()) {
-            result.detections.count { detection ->
-                val point = detection.box.bottomCenter
-                zones.road.contains(point) || zones.isInParking(point)
-            }
-        } else {
-            result.detections.size
-        }
-
         runOnUiThread {
             overlayView.setScene(
                 trackVisuals = visuals,
@@ -268,10 +283,8 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
                 rotatedImageWidth = result.rotatedWidth,
                 rotatedImageHeight = result.rotatedHeight
             )
-            updateDashboard(metrics, result, inZoneDetections)
-            if (zones.isComplete()) {
-                txtStatus.text = "סורק · ${metrics.activeTracks} באזור · RAW ${result.detections.size}"
-            }
+            updateDashboard(metrics, result, zoneDetections.size)
+            txtStatus.text = "סורק · ${metrics.activeTracks} רכבים מאומתים · RAW ${result.detections.size}"
         }
     }
 

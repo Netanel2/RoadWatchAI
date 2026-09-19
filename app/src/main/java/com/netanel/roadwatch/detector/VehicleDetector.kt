@@ -27,7 +27,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * RoadWatch V2 detector.
+ * RoadWatch V3 detector.
  *
  * Two complementary on-device YOLO models are fused:
  *  1) YOLO26n COCO detector for normal street / oblique views.
@@ -793,8 +793,8 @@ class VehicleDetector(
         const val GENERAL_MODEL = "yolo26n_w8a32.tflite"
         const val AERIAL_MODEL = "yolo26n_obb_w8a32.tflite"
 
-        private const val GENERAL_CONF = 0.12f
-        private const val AERIAL_CONF = 0.10f
+        private const val GENERAL_CONF = 0.30f
+        private const val AERIAL_CONF = 0.32f
 
         private val COCO_VEHICLE_IDS = intArrayOf(2, 3, 5, 7)
         private const val DOTA_LARGE_VEHICLE = 9

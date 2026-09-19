@@ -9,8 +9,8 @@ import kotlin.math.max
  * deterministic for mobile use.
  */
 class VehicleTracker(
-    private val highConfidence: Float = 0.30f,
-    private val newTrackConfidence: Float = 0.14f,
+    private val highConfidence: Float = 0.40f,
+    private val newTrackConfidence: Float = 0.30f,
     private val maxMissingMs: Long = 2600L
 ) {
     private data class MutableTrack(

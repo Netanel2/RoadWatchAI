@@ -32,6 +32,16 @@ data class Detection(
     val confidence: Float
 )
 
+data class PersonDetection(
+    val box: Box,
+    val confidence: Float
+)
+
+data class CrosswalkEstimate(
+    val box: Box,
+    val confidence: Float
+)
+
 data class TrackSnapshot(
     val id: Int,
     val box: Box,
@@ -71,7 +81,10 @@ data class DashboardMetrics(
     val carsNow: Int = 0,
     val trucksNow: Int = 0,
     val busesNow: Int = 0,
-    val motorcyclesNow: Int = 0
+    val motorcyclesNow: Int = 0,
+    val peopleNow: Int = 0,
+    val peopleInCrosswalkNow: Int = 0,
+    val yieldRiskNow: Int = 0
 )
 
 data class DailyCounts(

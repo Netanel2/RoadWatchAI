@@ -28,6 +28,19 @@ data class Box(
         bottom.coerceIn(0f, 1f)
     )
 
+    fun contains(point: Vec2): Boolean =
+        point.x in left..right && point.y in top..bottom
+
+    fun intersects(other: Box): Boolean =
+        max(left, other.left) < min(right, other.right) && max(top, other.top) < min(bottom, other.bottom)
+
+    fun expand(dx: Float, dy: Float): Box = Box(
+        left - dx,
+        top - dy,
+        right + dx,
+        bottom + dy
+    ).clamp01()
+
     fun iou(other: Box): Float {
         val x1 = max(left, other.left)
         val y1 = max(top, other.top)

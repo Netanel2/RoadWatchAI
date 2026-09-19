@@ -11,8 +11,8 @@ android {
         applicationId = "com.netanel.roadwatch"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "4.0.0"
+        versionCode = 5
+        versionName = "5.0.0-beta"
     }
 
     buildTypes {
@@ -64,6 +64,9 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.6.2")
     implementation("androidx.camera:camera-view:1.6.2")
     implementation("com.google.android.material:material:1.13.0")
+
+    // LiteRT 2.x CompiledModel: GPU first, automatic CPU fallback in our detector.
     implementation("com.google.ai.edge.litert:litert:2.1.5")
+
     testImplementation("junit:junit:4.13.2")
 }

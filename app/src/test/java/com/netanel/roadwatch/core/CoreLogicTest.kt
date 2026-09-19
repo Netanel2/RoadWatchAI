@@ -1,14 +1,10 @@
 package com.netanel.roadwatch.core
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CoreLogicTest {
-    private val fullRoad = Polygon2(
-        listOf(Vec2(0f, 0f), Vec2(1f, 0f), Vec2(1f, 1f), Vec2(0f, 1f))
-    )
 
     @Test
     fun trackerKeepsSameIdAcrossMotion() {
@@ -26,98 +22,117 @@ class CoreLogicTest {
     }
 
     @Test
-    fun automaticModeParksExistingCarWithoutManualZone() {
-        val engine = VehicleStateEngine(parkingDwellMs = 900L, stoppingDwellMs = 250L)
+    fun existingStationaryVehicleBecomesParkedButNotParkedToday() {
+        val engine = VehicleStateEngine(
+            parkingDwellMs = 900L,
+            stoppingDwellMs = 250L,
+            motionSampleMs = 200L
+        )
         var now = 0L
         fun stopped() = TrackSnapshot(
             1, Box(.2f, .2f, .3f, .3f), VehicleClass.CAR, .9f,
             0f, Vec2(0f, 0f), now, now, 3
         )
 
-        engine.update(listOf(stopped()), ZoneConfig(), now, automaticMode = true)
+        engine.update(listOf(stopped()), now)
         now = 300
-        assertEquals(VehicleState.STOPPING, engine.update(listOf(stopped()), ZoneConfig(), now, true).first.first().state)
-        now = 1_000
-        val result = engine.update(listOf(stopped()), ZoneConfig(), now, true)
+        assertEquals(VehicleState.STOPPING, engine.update(listOf(stopped()), now).first.first().state)
+        now = 1_100
+        val result = engine.update(listOf(stopped()), now)
         assertEquals(VehicleState.PARKED, result.first.first().state)
         assertEquals(1, result.second.parkedNow)
         assertEquals(0, result.second.parkedToday)
     }
 
     @Test
-    fun automaticModeCountsMovingVehicleWithoutTripwire() {
+    fun movingTrackCountsAsPassedWithoutManualLine() {
         val engine = VehicleStateEngine(
-            movingDwellMs = 100L,
-            movingSpeedMin = .05f,
-            automaticPassDistance = .025f
+            motionSampleMs = 100L,
+            movingDwellMs = 80L,
+            passDisplacementMin = .05f
         )
-        val zones = ZoneConfig()
         var now = 0L
         fun track(x: Float, hits: Int) = TrackSnapshot(
-            7, Box(x, .3f, x + .1f, .45f), VehicleClass.CAR, .9f,
-            .12f, Vec2(.12f, 0f), now, now, hits
+            4, Box(x, .2f, x + .1f, .3f), VehicleClass.CAR, .9f,
+            .1f, Vec2(.1f, 0f), now, now, hits
         )
 
-        engine.update(listOf(track(.10f, 3)), zones, now, true)
+        engine.update(listOf(track(.10f, 3)), now)
         now = 120
-        engine.update(listOf(track(.12f, 4)), zones, now, true)
+        engine.update(listOf(track(.14f, 4)), now)
         now = 240
-        val metrics = engine.update(listOf(track(.15f, 5)), zones, now, true).second
-        assertEquals(1, metrics.passedToday)
+        val result = engine.update(listOf(track(.18f, 5)), now)
+        assertEquals(1, result.second.passedToday)
         now = 360
-        assertEquals(1, engine.update(listOf(track(.20f, 6)), zones, now, true).second.passedToday)
+        assertEquals(1, engine.update(listOf(track(.24f, 6)), now).second.passedToday)
     }
 
     @Test
-    fun movingVehicleThatParksCreatesOneParkingEventAutomaticMode() {
+    fun movingVehicleThatStopsCreatesParkingEvent() {
         val engine = VehicleStateEngine(
-            parkingDwellMs = 700L,
-            stoppingDwellMs = 200L,
-            movingDwellMs = 100L,
-            movingSpeedMin = .05f
+            parkingDwellMs = 500L,
+            stoppingDwellMs = 150L,
+            movingDwellMs = 80L,
+            motionSampleMs = 100L,
+            passDisplacementMin = .04f
         )
-        val zones = ZoneConfig()
         var now = 0L
-        fun moving() = TrackSnapshot(
-            4, Box(.1f, .2f, .2f, .3f), VehicleClass.CAR, .9f,
-            .10f, Vec2(.10f, 0f), now, now, 4
+        fun snap(x: Float, id: Int = 7) = TrackSnapshot(
+            id, Box(x, .3f, x + .1f, .4f), VehicleClass.CAR, .9f,
+            0f, Vec2(0f, 0f), now, now, 4
         )
-        fun stopped() = moving().copy(speed = 0f, velocity = Vec2(0f, 0f))
 
-        engine.update(listOf(moving()), zones, now, true)
+        engine.update(listOf(snap(.10f)), now)
         now = 120
-        engine.update(listOf(moving()), zones, now, true)
-        now = 250
-        engine.update(listOf(stopped()), zones, now, true)
+        engine.update(listOf(snap(.16f)), now)
+        now = 240
+        engine.update(listOf(snap(.22f)), now)
+        now = 360
+        engine.update(listOf(snap(.22f)), now)
+        now = 600
+        engine.update(listOf(snap(.22f)), now)
         now = 1_000
-        val result = engine.update(listOf(stopped()), zones, now, true)
+        val result = engine.update(listOf(snap(.22f)), now)
         assertEquals(VehicleState.PARKED, result.first.first().state)
         assertEquals(1, result.second.parkedToday)
         assertEquals(1, result.second.parkedNow)
     }
 
     @Test
-    fun multipleParkingZonesAreStillSupportedForManualCompatibility() {
-        val left = Polygon2(listOf(Vec2(0f,0f), Vec2(.3f,0f), Vec2(.3f,1f), Vec2(0f,1f)))
-        val right = Polygon2(listOf(Vec2(.7f,0f), Vec2(1f,0f), Vec2(1f,1f), Vec2(.7f,1f)))
-        val zones = ZoneConfig(road = fullRoad, parkingZones = listOf(left, right))
-        assertTrue(zones.isInParking(Vec2(.1f,.5f)))
-        assertTrue(zones.isInParking(Vec2(.9f,.5f)))
-        assertFalse(zones.isInParking(Vec2(.5f,.5f)))
+    fun parkedVehicleLeavingCreatesLeftEvent() {
+        val engine = VehicleStateEngine(
+            parkingDwellMs = 400L,
+            stoppingDwellMs = 100L,
+            movingDwellMs = 80L,
+            motionSampleMs = 100L
+        )
+        var now = 0L
+        fun snap(x: Float) = TrackSnapshot(
+            12, Box(x, .3f, x + .1f, .4f), VehicleClass.CAR, .9f,
+            0f, Vec2(0f, 0f), now, now, 4
+        )
+
+        engine.update(listOf(snap(.2f)), now)
+        now = 150
+        engine.update(listOf(snap(.2f)), now)
+        now = 550
+        assertEquals(VehicleState.PARKED, engine.update(listOf(snap(.2f)), now).first.first().state)
+        now = 700
+        val leaving = engine.update(listOf(snap(.25f)), now)
+        assertEquals(VehicleState.LEAVING, leaving.first.first().state)
+        assertEquals(1, leaving.second.leftParkingToday)
     }
 
     @Test
-    fun manualFiniteTripwireStillWorks() {
-        val engine = VehicleStateEngine()
-        val zones = ZoneConfig(
-            road = fullRoad,
-            countLine = Line2(Vec2(.5f, .25f), Vec2(.5f, .75f))
+    fun staleTrackDoesNotCreateFreshMotionEvidence() {
+        val engine = VehicleStateEngine(evidenceFreshnessMs = 200L, motionSampleMs = 100L)
+        val track = TrackSnapshot(
+            21, Box(.2f,.2f,.3f,.3f), VehicleClass.CAR,.9f,
+            0f, Vec2(0f,0f), 0, 0, 3
         )
-        val a = TrackSnapshot(
-            9, Box(.35f,.3f,.45f,.45f), VehicleClass.CAR,.9f,.2f,Vec2(.2f,0f),0,0,3
-        )
-        val b = a.copy(box = Box(.55f,.3f,.65f,.45f), lastSeenMs = 100, hits = 4)
-        engine.update(listOf(a), zones, 0)
-        assertEquals(1, engine.update(listOf(b), zones, 100).second.passedToday)
+        engine.update(listOf(track), 0)
+        val stale = engine.update(listOf(track), 1_000)
+        assertEquals(VehicleState.UNKNOWN, stale.first.first().state)
+        assertEquals(0, stale.second.passedToday)
     }
 }

@@ -3,19 +3,18 @@ package com.netanel.roadwatch.ui
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.util.AttributeSet
-import android.view.MotionEvent
 import android.view.View
 import com.netanel.roadwatch.core.Box
-import com.netanel.roadwatch.core.Line2
-import com.netanel.roadwatch.core.Polygon2
+import com.netanel.roadwatch.core.CrosswalkEstimate
+import com.netanel.roadwatch.core.PersonDetection
 import com.netanel.roadwatch.core.TrackVisual
 import com.netanel.roadwatch.core.Vec2
 import com.netanel.roadwatch.core.VehicleState
-import com.netanel.roadwatch.core.ZoneConfig
 import kotlin.math.min
 
 class OverlayView @JvmOverloads constructor(
@@ -23,161 +22,74 @@ class OverlayView @JvmOverloads constructor(
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
 
-    enum class EditMode { NONE, ROAD, PARKING, COUNT_LINE }
-
-    var onZonesChanged: ((ZoneConfig) -> Unit)? = null
-    var onEditProgress: ((String) -> Unit)? = null
-
     private var visuals: List<TrackVisual> = emptyList()
-    private var zones: ZoneConfig = ZoneConfig()
+    private var people: List<PersonDetection> = emptyList()
+    private var crosswalk: CrosswalkEstimate? = null
     private var imageWidth = 1
     private var imageHeight = 1
-    private var editMode = EditMode.NONE
-    private val draft = mutableListOf<Vec2>()
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = dp(1.8f)
+        strokeWidth = dp(2.4f)
     }
-    private val zonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val personPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = dp(2.2f)
+        color = Color.rgb(255, 210, 74)
+        strokeWidth = dp(2f)
     }
-    private val zoneFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val crosswalkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.rgb(80, 231, 219)
+        strokeWidth = dp(2f)
+        pathEffect = DashPathEffect(floatArrayOf(dp(8f), dp(6f)), 0f)
+    }
     private val labelBg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.argb(205, 8, 15, 24)
     }
     private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
-        textSize = sp(10f)
+        textSize = sp(11f)
         typeface = android.graphics.Typeface.DEFAULT_BOLD
     }
-    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val dashedEffect = android.graphics.DashPathEffect(floatArrayOf(dp(8f), dp(7f)), 0f)
-
-    init {
-        setLayerType(LAYER_TYPE_SOFTWARE, null)
-        isClickable = true
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
     }
 
     fun setScene(
         trackVisuals: List<TrackVisual>,
-        zoneConfig: ZoneConfig,
+        personDetections: List<PersonDetection>,
+        crosswalkEstimate: CrosswalkEstimate?,
         rotatedImageWidth: Int,
         rotatedImageHeight: Int
     ) {
         visuals = trackVisuals
-        zones = zoneConfig
+        people = personDetections
+        crosswalk = crosswalkEstimate
         imageWidth = rotatedImageWidth.coerceAtLeast(1)
         imageHeight = rotatedImageHeight.coerceAtLeast(1)
         invalidate()
     }
 
-    fun setZones(zoneConfig: ZoneConfig) {
-        zones = zoneConfig
-        invalidate()
-    }
-
-    fun getZones(): ZoneConfig = zones
-
-    fun removeLastParkingZone() {
-        if (zones.parkingZones.isEmpty()) return
-        zones = zones.copy(parkingZones = zones.parkingZones.dropLast(1))
-        onZonesChanged?.invoke(zones)
-        invalidate()
-    }
-
-    fun clearAllZones() {
-        zones = ZoneConfig()
-        editMode = EditMode.NONE
-        draft.clear()
-        onZonesChanged?.invoke(zones)
-        invalidate()
-    }
-
-    fun beginEdit(mode: EditMode) {
-        editMode = mode
-        draft.clear()
-        val required = requiredPoints(mode)
-        onEditProgress?.invoke(editHint(mode, 0, required))
-        invalidate()
-    }
-
-    fun cancelEdit() {
-        editMode = EditMode.NONE
-        draft.clear()
-        invalidate()
-    }
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (editMode == EditMode.NONE) return false
-        if (event.action != MotionEvent.ACTION_UP) return true
-        val point = viewToNormalized(event.x, event.y) ?: return true
-        draft += point
-        val required = requiredPoints(editMode)
-        onEditProgress?.invoke(editHint(editMode, draft.size, required))
-        if (draft.size >= required) {
-            zones = when (editMode) {
-                EditMode.ROAD -> zones.copy(road = Polygon2(draft.toList()))
-                EditMode.PARKING -> zones.copy(parkingZones = zones.parkingZones + Polygon2(draft.toList()))
-                EditMode.COUNT_LINE -> zones.copy(countLine = Line2(draft[0], draft[1]))
-                EditMode.NONE -> zones
-            }
-            onZonesChanged?.invoke(zones)
-            editMode = EditMode.NONE
-            draft.clear()
-        }
-        invalidate()
-        return true
-    }
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (editMode != EditMode.NONE || zones.road.isValid() || zones.parkingZones.isNotEmpty() || zones.countLine != null) {
-            drawZones(canvas)
-        }
-        drawTracks(canvas)
-        drawDraft(canvas)
-    }
+        val now = android.os.SystemClock.uptimeMillis()
 
-    private fun drawZones(canvas: Canvas) {
-        drawPolygon(canvas, zones.road, Color.rgb(54, 201, 235), Color.argb(20, 54, 201, 235))
-        zones.parkingZones.forEachIndexed { index, polygon ->
-            drawPolygon(canvas, polygon, Color.rgb(66, 216, 154), Color.argb(22, 66, 216, 154))
-            polygon.points.firstOrNull()?.let { point ->
-                val p = normalizedToView(point)
-                drawLabel(canvas, "P${index + 1}", p.x, p.y, Color.rgb(66, 216, 154))
-            }
+        crosswalk?.let { estimate ->
+            val rect = boxToView(estimate.box)
+            val path = Path().apply { addRoundRect(rect, dp(8f), dp(8f), Path.Direction.CW) }
+            canvas.drawPath(path, crosswalkPaint)
+            val conf = (estimate.confidence * 100f).toInt().coerceIn(0, 100)
+            drawLabel(canvas, "מעבר חציה · ${conf}%", rect.left, rect.top, Color.rgb(80, 231, 219))
         }
-        zones.countLine?.let { line ->
-            zonePaint.color = Color.rgb(245, 196, 81)
-            zonePaint.pathEffect = dashedEffect
-            zonePaint.strokeWidth = dp(2.4f)
-            val a = normalizedToView(line.a)
-            val b = normalizedToView(line.b)
-            canvas.drawLine(a.x, a.y, b.x, b.y, zonePaint)
-            zonePaint.pathEffect = null
-        }
-    }
 
-    private fun drawPolygon(canvas: Canvas, polygon: Polygon2, stroke: Int, fill: Int) {
-        if (polygon.points.size < 3) return
-        val path = Path()
-        polygon.points.forEachIndexed { index, point ->
-            val p = normalizedToView(point)
-            if (index == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y)
+        people.forEach { person ->
+            val rect = boxToView(person.box)
+            canvas.drawRoundRect(rect, dp(6f), dp(6f), personPaint)
+            val conf = (person.confidence * 100f).toInt().coerceIn(0, 100)
+            drawLabel(canvas, "אדם · ${conf}%", rect.left, rect.top, personPaint.color)
         }
-        path.close()
-        zoneFillPaint.color = fill
-        canvas.drawPath(path, zoneFillPaint)
-        zonePaint.color = stroke
-        zonePaint.pathEffect = dashedEffect
-        canvas.drawPath(path, zonePaint)
-        zonePaint.pathEffect = null
-    }
 
-    private fun drawTracks(canvas: Canvas) {
         visuals.forEach { visual ->
             val rect = boxToView(visual.track.box)
             val color = when (visual.state) {
@@ -188,60 +100,21 @@ class OverlayView @JvmOverloads constructor(
                 VehicleState.UNKNOWN -> Color.rgb(150, 166, 184)
             }
             boxPaint.color = color
-            boxPaint.strokeWidth = if (visual.state == VehicleState.PARKED) dp(2.4f) else dp(1.8f)
-            canvas.drawRoundRect(rect, dp(6f), dp(6f), boxPaint)
+            boxPaint.strokeWidth = if (visual.state == VehicleState.PARKED) dp(3f) else dp(2.2f)
+            canvas.drawRoundRect(rect, dp(7f), dp(7f), boxPaint)
+
+            val bottom = normalizedToView(visual.track.bottomCenter)
+            dotPaint.color = color
+            canvas.drawCircle(bottom.x, bottom.y, dp(3.5f), dotPaint)
 
             val conf = (visual.track.confidence * 100f).toInt().coerceIn(0, 100)
-            val stateText = when (visual.state) {
-                VehicleState.PARKED -> "חונה"
-                VehicleState.MOVING -> "נע"
-                VehicleState.STOPPING -> "עוצר"
-                VehicleState.LEAVING -> "יוצא"
-                VehicleState.UNKNOWN -> "בודק"
-            }
-            drawLabel(canvas, "#${visual.track.id} · $stateText · $conf%", rect.left, rect.top, color)
+            val parkedSeconds = ((now - visual.stateSinceMs).coerceAtLeast(0L) / 1000L)
+            val suffix = if (visual.state == VehicleState.PARKED) " · ${parkedSeconds}s" else ""
+            val label = "#${visual.track.id} · ${visual.track.vehicleClass.he} · ${visual.state.he} · ${conf}%$suffix"
+            drawLabel(canvas, label, rect.left, rect.top, color)
         }
     }
 
-    private fun drawLabel(canvas: Canvas, text: String, x: Float, y: Float, accent: Int) {
-        val paddingX = dp(5f)
-        val paddingY = dp(4f)
-        val width = labelPaint.measureText(text) + paddingX * 2
-        val height = labelPaint.textSize + paddingY * 2
-        val top = (y - height).coerceAtLeast(0f)
-        val right = (x + width).coerceAtMost(this.width.toFloat())
-        val left = (right - width).coerceAtLeast(0f)
-        val bg = RectF(left, top, right, top + height)
-        canvas.drawRoundRect(bg, dp(5f), dp(5f), labelBg)
-        dotPaint.color = accent
-        canvas.drawRect(bg.left, bg.top, bg.left + dp(2.5f), bg.bottom, dotPaint)
-        canvas.drawText(text, bg.left + paddingX, bg.bottom - paddingY, labelPaint)
-    }
-
-    private fun drawDraft(canvas: Canvas) {
-        if (editMode == EditMode.NONE || draft.isEmpty()) return
-        val color = when (editMode) {
-            EditMode.ROAD -> Color.rgb(54, 201, 235)
-            EditMode.PARKING -> Color.rgb(66, 216, 154)
-            EditMode.COUNT_LINE -> Color.rgb(245, 196, 81)
-            EditMode.NONE -> Color.WHITE
-        }
-        zonePaint.color = color
-        dotPaint.color = color
-        var previous: Vec2? = null
-        draft.forEach { point ->
-            val p = normalizedToView(point)
-            canvas.drawCircle(p.x, p.y, dp(6f), dotPaint)
-            previous?.let {
-                val pp = normalizedToView(it)
-                canvas.drawLine(pp.x, pp.y, p.x, p.y, zonePaint)
-            }
-            previous = point
-        }
-    }
-
-    // V4 uses PreviewView.FIT_CENTER so the complete camera image is visible.
-    // Overlay geometry must use the same fit transform to stay pixel-aligned.
     private fun frameRect(): RectF {
         val viewW = width.toFloat().coerceAtLeast(1f)
         val viewH = height.toFloat().coerceAtLeast(1f)
@@ -255,15 +128,9 @@ class OverlayView @JvmOverloads constructor(
 
     private fun normalizedToView(point: Vec2): Vec2 {
         val rect = frameRect()
-        return Vec2(rect.left + point.x * rect.width(), rect.top + point.y * rect.height())
-    }
-
-    private fun viewToNormalized(x: Float, y: Float): Vec2? {
-        val rect = frameRect()
-        if (!rect.contains(x, y)) return null
         return Vec2(
-            ((x - rect.left) / rect.width()).coerceIn(0f, 1f),
-            ((y - rect.top) / rect.height()).coerceIn(0f, 1f)
+            rect.left + point.x * rect.width(),
+            rect.top + point.y * rect.height()
         )
     }
 
@@ -273,14 +140,19 @@ class OverlayView @JvmOverloads constructor(
         return RectF(tl.x, tl.y, br.x, br.y)
     }
 
-    private fun requiredPoints(mode: EditMode): Int = when (mode) {
-        EditMode.ROAD, EditMode.PARKING -> 4
-        EditMode.COUNT_LINE -> 2
-        EditMode.NONE -> 0
+    private fun drawLabel(canvas: Canvas, text: String, x: Float, y: Float, accent: Int) {
+        val paddingX = dp(6f)
+        val paddingY = dp(4f)
+        val width = labelPaint.measureText(text) + paddingX * 2
+        val height = labelPaint.textSize + paddingY * 2
+        val safeX = x.coerceIn(0f, (this.width - width).coerceAtLeast(0f))
+        val top = (y - height).coerceAtLeast(0f)
+        val bg = RectF(safeX, top, (safeX + width).coerceAtMost(this.width.toFloat()), top + height)
+        canvas.drawRoundRect(bg, dp(6f), dp(6f), labelBg)
+        dotPaint.color = accent
+        canvas.drawRect(bg.left, bg.top, bg.left + dp(3f), bg.bottom, dotPaint)
+        canvas.drawText(text, bg.left + paddingX, bg.bottom - paddingY, labelPaint)
     }
-
-    private fun editHint(mode: EditMode, current: Int, required: Int): String =
-        "נקודה ${(current + 1).coerceAtMost(required)}/$required"
 
     private fun dp(value: Float): Float = value * resources.displayMetrics.density
     private fun sp(value: Float): Float = value * resources.displayMetrics.scaledDensity

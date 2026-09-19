@@ -13,7 +13,9 @@ import com.google.ai.edge.litert.Accelerator
 import com.google.ai.edge.litert.CompiledModel
 import com.google.ai.edge.litert.TensorBuffer
 import com.netanel.roadwatch.core.Box
+import com.netanel.roadwatch.core.CrosswalkEstimate
 import com.netanel.roadwatch.core.Detection
+import com.netanel.roadwatch.core.PersonDetection
 import com.netanel.roadwatch.core.VehicleClass
 import java.io.File
 import java.io.FileOutputStream
@@ -26,18 +28,6 @@ import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/**
- * RoadWatch V3 detector.
- *
- * Two complementary on-device YOLO models are fused:
- *  1) YOLO26n COCO detector for normal street / oblique views.
- *  2) YOLO26n-OBB DOTA detector for steep / aerial / rotated vehicle views.
- *
- * The second model is adaptive: it runs every second analyzed frame when the
- * street detector already sees vehicles, and every frame when the street model
- * sees none. CameraX keeps only the newest frame, so inference can never build
- * up a latency queue.
- */
 class VehicleDetector(
     private val context: Context,
     private val listener: Listener
@@ -51,6 +41,8 @@ class VehicleDetector(
 
     data class Result(
         val detections: List<Detection>,
+        val personDetections: List<PersonDetection>,
+        val crosswalk: CrosswalkEstimate?,
         val inferenceMs: Long,
         val generalMs: Long,
         val aerialMs: Long,
@@ -69,6 +61,11 @@ class VehicleDetector(
         val vehicleClass: VehicleClass,
         val confidence: Float,
         val source: Source
+    )
+
+    private data class GeneralDecoded(
+        val vehicles: List<Candidate>,
+        val people: List<PersonDetection>
     )
 
     private data class Letterbox(
@@ -129,10 +126,7 @@ class VehicleDetector(
             "RoadWatch expects a square YOLO input"
         }
 
-        // Official mobile assets are 640x640. Keep the code tolerant of another
-        // square size so a custom fine-tuned model can replace them later.
         ensureModelBuffers(reference.inputWidth, reference.inputHeight)
-
         ready = true
         listener.onReady(engineLabel())
     }
@@ -165,22 +159,22 @@ class VehicleDetector(
             val start = SystemClock.elapsedRealtime()
 
             val generalRunner = general
-            val generalCandidates: List<Candidate>
+            val generalDecoded: GeneralDecoded
             val generalMs: Long
             if (generalRunner != null) {
                 val input = inputFor(generalRunner)
                 val t0 = SystemClock.elapsedRealtime()
                 val outputs = generalRunner.run(input)
                 generalMs = SystemClock.elapsedRealtime() - t0
-                generalCandidates = decodeGeneral(generalRunner, outputs, letterbox)
+                generalDecoded = decodeGeneral(generalRunner, outputs, letterbox)
             } else {
                 generalMs = 0L
-                generalCandidates = emptyList()
+                generalDecoded = GeneralDecoded(emptyList(), emptyList())
             }
 
-            // A steep-angle model is the safety net. When the normal detector sees
-            // nothing, it is run every frame. Otherwise every second frame is enough
-            // for parking / occupancy while keeping the preview fluid.
+            val generalCandidates = generalDecoded.vehicles
+            val personDetections = generalDecoded.people
+
             val shouldRunAerial = aerial != null &&
                 (generalCandidates.isEmpty() || frameNumber % 2L == 0L)
 
@@ -201,10 +195,13 @@ class VehicleDetector(
             val fused = fuse(generalCandidates + aerialCandidates)
                 .map { Detection(it.box, it.vehicleClass, it.confidence) }
 
+            val crosswalk = estimateCrosswalk(oriented)
             val totalMs = SystemClock.elapsedRealtime() - start
             listener.onResult(
                 Result(
                     detections = fused,
+                    personDetections = personDetections,
+                    crosswalk = crosswalk,
                     inferenceMs = totalMs,
                     generalMs = generalMs,
                     aerialMs = aerialMs,
@@ -222,7 +219,6 @@ class VehicleDetector(
         }
     }
 
-    /** Copy CameraX RGBA_8888 safely even on devices that return padded rows. */
     private fun copyRgbaFrame(imageProxy: ImageProxy, target: Bitmap) {
         val plane = imageProxy.planes.firstOrNull() ?: error("Camera frame has no RGBA plane")
         val buffer = plane.buffer.duplicate()
@@ -238,12 +234,7 @@ class VehicleDetector(
         }
 
         if (pixelStride != 4) {
-            // CameraX RGBA_8888 is expected to use 4 bytes per pixel. If a vendor
-            // implementation violates that, use CameraX's own safe conversion.
-            val converted = imageProxy.toBitmap()
-            Canvas(target).drawBitmap(converted, 0f, 0f, bitmapPaint)
-            if (converted !== target && !converted.isRecycled) converted.recycle()
-            return
+            throw IllegalStateException("Unsupported RGBA pixel stride: $pixelStride")
         }
 
         val packedSize = width * height * 4
@@ -368,53 +359,64 @@ class VehicleDetector(
         runner: LiteRtRunner,
         outputs: List<FloatArray>,
         transform: Letterbox
-    ): List<Candidate> {
-        val flat = outputs.firstOrNull() ?: return emptyList()
+    ): GeneralDecoded {
+        val flat = outputs.firstOrNull() ?: return GeneralDecoded(emptyList(), emptyList())
         val dims = runner.outputDims.firstOrNull() ?: IntArray(0)
-        if (dims.size < 3) return emptyList()
+        if (dims.size < 3) return GeneralDecoded(emptyList(), emptyList())
 
         val d1 = dims[1]
         val d2 = dims[2]
-        val candidates = mutableListOf<Candidate>()
+        val vehicles = mutableListOf<Candidate>()
+        val people = mutableListOf<PersonDetection>()
 
-        // End-to-end [1, N, 6]: x1,y1,x2,y2,score,class
         if (d2 in 6..8 && d2 < d1) {
             for (row in 0 until d1) {
                 val base = row * d2
                 if (base + 5 >= flat.size) break
                 val score = flat[base + 4]
-                if (score < GENERAL_CONF) continue
+                if (score < minOf(GENERAL_CONF, PERSON_CONF)) continue
                 val cls = flat[base + 5].toInt()
-                val vehicleClass = cocoVehicleClass(cls) ?: continue
                 val box = modelRectToNormalized(
                     flat[base], flat[base + 1], flat[base + 2], flat[base + 3], transform
                 ) ?: continue
-                candidates += Candidate(box, vehicleClass, score, Source.GENERAL)
+
+                if (cls == PERSON_CLASS_ID && score >= PERSON_CONF && personShapePlausible(box, score)) {
+                    people += PersonDetection(box, score)
+                }
+                val vehicleClass = cocoVehicleClass(cls)
+                if (vehicleClass != null && score >= GENERAL_CONF && vehicleShapePlausible(box, vehicleClass, score)) {
+                    vehicles += Candidate(box, vehicleClass, score, Source.GENERAL)
+                }
             }
-            return nms(candidates, 0.55f, 35)
+            return GeneralDecoded(
+                vehicles = nms(vehicles, 0.55f, 35),
+                people = nmsPeople(people, 0.45f, 20)
+            )
         }
 
-        // Raw Ultralytics detect head [1, 4+classes, anchors]
         val features = d1
         val anchors = d2
-        if (features < 8 || anchors <= 0) return emptyList()
+        if (features < 8 || anchors <= 0) return GeneralDecoded(emptyList(), emptyList())
         val classRows = features - 4
 
         for (i in 0 until anchors) {
-            var bestScore = 0f
-            var bestClass = -1
+            var bestVehicleScore = 0f
+            var bestVehicleClass = -1
             for (cls in COCO_VEHICLE_IDS) {
                 if (cls >= classRows) continue
                 val idx = (4 + cls) * anchors + i
                 if (idx >= flat.size) continue
                 val score = flat[idx]
-                if (score > bestScore) {
-                    bestScore = score
-                    bestClass = cls
+                if (score > bestVehicleScore) {
+                    bestVehicleScore = score
+                    bestVehicleClass = cls
                 }
             }
-            if (bestScore < GENERAL_CONF) continue
-            val vehicleClass = cocoVehicleClass(bestClass) ?: continue
+
+            val personScore = if (PERSON_CLASS_ID < classRows) {
+                val idx = (4 + PERSON_CLASS_ID) * anchors + i
+                if (idx in flat.indices) flat[idx] else 0f
+            } else 0f
 
             var cx = flat[i]
             var cy = flat[anchors + i]
@@ -430,10 +432,22 @@ class VehicleDetector(
 
             val box = modelRectToNormalized(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f, transform)
                 ?: continue
-            if (box.area < 0.00012f) continue
-            candidates += Candidate(box, vehicleClass, bestScore, Source.GENERAL)
+
+            if (personScore >= PERSON_CONF && personShapePlausible(box, personScore)) {
+                people += PersonDetection(box, personScore)
+            }
+
+            if (bestVehicleScore >= GENERAL_CONF) {
+                val vehicleClass = cocoVehicleClass(bestVehicleClass) ?: continue
+                if (box.area < 0.00012f) continue
+                if (!vehicleShapePlausible(box, vehicleClass, bestVehicleScore)) continue
+                vehicles += Candidate(box, vehicleClass, bestVehicleScore, Source.GENERAL)
+            }
         }
-        return nms(candidates, 0.55f, 35)
+        return GeneralDecoded(
+            vehicles = nms(vehicles, 0.55f, 35),
+            people = nmsPeople(people, 0.45f, 20)
+        )
     }
 
     private fun decodeAerial(
@@ -449,7 +463,6 @@ class VehicleDetector(
         val anchors = dims[2]
         val candidates = mutableListOf<Candidate>()
 
-        // Current OBB raw head: 4 box + DOTA classes + 1 angle.
         if (channels >= 7 && anchors > channels) {
             val numClasses = channels - 5
             val angleRow = (4 + numClasses) * anchors
@@ -485,12 +498,12 @@ class VehicleDetector(
                     ?: continue
                 if (box.area < 0.00010f) continue
                 val vehicleClass = if (bestClass == DOTA_LARGE_VEHICLE) VehicleClass.TRUCK else VehicleClass.CAR
+                if (!vehicleShapePlausible(box, vehicleClass, bestScore)) continue
                 candidates += Candidate(box, vehicleClass, bestScore * 0.96f, Source.AERIAL)
             }
             return nms(candidates, 0.50f, 35)
         }
 
-        // Defensive support for an end-to-end OBB [1,N,7] export.
         if (anchors in 7..9 && anchors < channels) {
             for (row in 0 until channels) {
                 val base = row * anchors
@@ -503,6 +516,7 @@ class VehicleDetector(
                     flat[base], flat[base + 1], flat[base + 2], flat[base + 3], transform
                 ) ?: continue
                 val vehicleClass = if (cls == DOTA_LARGE_VEHICLE) VehicleClass.TRUCK else VehicleClass.CAR
+                if (!vehicleShapePlausible(box, vehicleClass, score)) continue
                 candidates += Candidate(box, vehicleClass, score * 0.96f, Source.AERIAL)
             }
         }
@@ -577,10 +591,18 @@ class VehicleDetector(
         return keep
     }
 
-    /**
-     * Cross-model fusion. General YOLO wins the class label when both models see
-     * the same vehicle; aerial OBB remains able to create a detection on its own.
-     */
+    private fun nmsPeople(input: List<PersonDetection>, iouThreshold: Float, limit: Int): List<PersonDetection> {
+        if (input.isEmpty()) return emptyList()
+        val sorted = input.sortedByDescending { it.confidence }
+        val keep = mutableListOf<PersonDetection>()
+        for (candidate in sorted) {
+            if (keep.any { it.box.iou(candidate.box) > iouThreshold }) continue
+            keep += candidate
+            if (keep.size >= limit) break
+        }
+        return keep
+    }
+
     private fun fuse(input: List<Candidate>): List<Candidate> {
         if (input.isEmpty()) return emptyList()
         val sorted = input.sortedByDescending {
@@ -604,6 +626,121 @@ class VehicleDetector(
             out[index] = preferred.copy(confidence = max(existing.confidence, candidate.confidence))
         }
         return out.sortedByDescending { it.confidence }.take(40)
+    }
+
+    private fun vehicleShapePlausible(box: Box, vehicleClass: VehicleClass, confidence: Float): Boolean {
+        val aspect = box.width / max(0.0001f, box.height)
+        if (box.area < 0.00010f || box.area > 0.45f) return false
+        if (aspect < 0.42f || aspect > 5.8f) return false
+        if (confidence < 0.40f && box.area < 0.0011f) return false
+        if (vehicleClass == VehicleClass.BUS || vehicleClass == VehicleClass.TRUCK) {
+            if (box.area < 0.00022f) return false
+        }
+        return true
+    }
+
+    private fun personShapePlausible(box: Box, confidence: Float): Boolean {
+        val aspect = box.width / max(0.0001f, box.height)
+        if (box.area < 0.00008f || box.area > 0.20f) return false
+        if (aspect < 0.16f || aspect > 1.25f) return false
+        if (confidence < 0.45f && box.area < 0.00025f) return false
+        return true
+    }
+
+    private fun estimateCrosswalk(bitmap: Bitmap): CrosswalkEstimate? {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width < 120 || height < 120) return null
+
+        val yStart = (height * 0.35f).toInt()
+        val yEnd = (height * 0.92f).toInt().coerceAtLeast(yStart + 1)
+        val xStart = (width * 0.06f).toInt()
+        val xEnd = (width * 0.94f).toInt().coerceAtLeast(xStart + 1)
+        val step = 4
+        val rows = ((yEnd - yStart) / step).coerceAtLeast(1)
+        val cols = ((xEnd - xStart) / step).coerceAtLeast(1)
+        val rowScores = IntArray(rows)
+        val colScores = IntArray(cols)
+        val bandMask = BooleanArray(rows)
+
+        for (ri in 0 until rows) {
+            val y = yStart + ri * step
+            var score = 0
+            for (ci in 0 until cols) {
+                val x = xStart + ci * step
+                val pixel = bitmap.getPixel(x.coerceIn(0, width - 1), y.coerceIn(0, height - 1))
+                if (isWhiteLike(pixel)) {
+                    score++
+                }
+            }
+            rowScores[ri] = score
+        }
+
+        val rowThreshold = max(6, (cols * 0.22f).toInt())
+        for (ri in rowScores.indices) {
+            val prev = rowScores.getOrElse(ri - 1) { rowScores[ri] }
+            val cur = rowScores[ri]
+            val next = rowScores.getOrElse(ri + 1) { rowScores[ri] }
+            val smoothed = (prev + cur + next) / 3
+            if (smoothed >= rowThreshold) bandMask[ri] = true
+        }
+
+        val bands = mutableListOf<IntRange>()
+        var startBand = -1
+        for (i in bandMask.indices) {
+            if (bandMask[i] && startBand < 0) startBand = i
+            val end = i == bandMask.lastIndex || !bandMask.getOrElse(i + 1) { false }
+            if (startBand >= 0 && end) {
+                if (i - startBand >= 1) bands += startBand..i
+                startBand = -1
+            }
+        }
+        if (bands.size < 3) return null
+
+        val chosen = bands.takeLast(6)
+        for (band in chosen) {
+            for (ri in band) {
+                val y = yStart + ri * step
+                for (ci in 0 until cols) {
+                    val x = xStart + ci * step
+                    val pixel = bitmap.getPixel(x.coerceIn(0, width - 1), y.coerceIn(0, height - 1))
+                    if (isWhiteLike(pixel)) colScores[ci]++
+                }
+            }
+        }
+
+        val colThreshold = max(2, (chosen.size * 0.45f).toInt())
+        var leftIdx = -1
+        var rightIdx = -1
+        for (i in colScores.indices) {
+            if (colScores[i] >= colThreshold) {
+                if (leftIdx < 0) leftIdx = i
+                rightIdx = i
+            }
+        }
+        if (leftIdx < 0 || rightIdx <= leftIdx) return null
+
+        val topRow = chosen.first().first
+        val bottomRow = chosen.last().last
+        val left = (xStart + leftIdx * step).toFloat() / width
+        val right = (xStart + (rightIdx + 1) * step).toFloat() / width
+        val top = (yStart + topRow * step).toFloat() / height
+        val bottom = (yStart + (bottomRow + 1) * step).toFloat() / height
+        val box = Box(left, top, right, bottom).clamp01()
+
+        if (box.width < 0.10f || box.height < 0.04f) return null
+        val confidence = (0.32f + chosen.size * 0.06f + box.width * 0.22f).coerceIn(0f, 0.95f)
+        return CrosswalkEstimate(box, confidence)
+    }
+
+    private fun isWhiteLike(pixel: Int): Boolean {
+        val r = Color.red(pixel)
+        val g = Color.green(pixel)
+        val b = Color.blue(pixel)
+        val maxRgb = max(r, max(g, b))
+        val minRgb = min(r, min(g, b))
+        val brightness = (r + g + b) / 3
+        return brightness >= 155 && maxRgb - minRgb <= 42
     }
 
     private fun cocoVehicleClass(classId: Int): VehicleClass? = when (classId) {
@@ -752,8 +889,6 @@ class VehicleDetector(
         }
 
         private fun inferOutputShape(count: Int): IntArray {
-            // Current official models expose output_0, so this is only a defensive
-            // fallback. Use the known task first to avoid ambiguous factors.
             val featureOrder = if (assetName.contains("obb", ignoreCase = true)) {
                 intArrayOf(20, 19, 7, 84, 6)
             } else {
@@ -795,6 +930,8 @@ class VehicleDetector(
 
         private const val GENERAL_CONF = 0.30f
         private const val AERIAL_CONF = 0.32f
+        private const val PERSON_CONF = 0.34f
+        private const val PERSON_CLASS_ID = 0
 
         private val COCO_VEHICLE_IDS = intArrayOf(2, 3, 5, 7)
         private const val DOTA_LARGE_VEHICLE = 9

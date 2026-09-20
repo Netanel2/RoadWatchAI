@@ -29,6 +29,10 @@ class OverlayView @JvmOverloads constructor(
     private var crosswalkLocked = false
     private var imageWidth = 1
     private var imageHeight = 1
+    private var vehicleFromBoxes: Map<Int, Box> = emptyMap()
+    private var personFromBoxes: Map<Int, Box> = emptyMap()
+    private var animationStartMs = 0L
+    private val animationDurationMs = 95L
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -64,18 +68,28 @@ class OverlayView @JvmOverloads constructor(
         rotatedImageWidth: Int,
         rotatedImageHeight: Int
     ) {
+        val previousVehicles = visuals.associate { it.track.id to it.track.box }
+        val previousPeople = people.associate { it.track.id to it.track.box }
+        vehicleFromBoxes = trackVisuals.associate { visual ->
+            visual.track.id to (previousVehicles[visual.track.id] ?: visual.track.box)
+        }
+        personFromBoxes = personVisuals.associate { visual ->
+            visual.track.id to (previousPeople[visual.track.id] ?: visual.track.box)
+        }
         visuals = trackVisuals
         people = personVisuals
         crosswalk = crosswalkEstimate
         this.crosswalkLocked = crosswalkLocked
         imageWidth = rotatedImageWidth.coerceAtLeast(1)
         imageHeight = rotatedImageHeight.coerceAtLeast(1)
-        invalidate()
+        animationStartMs = android.os.SystemClock.uptimeMillis()
+        postInvalidateOnAnimation()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val now = android.os.SystemClock.uptimeMillis()
+        val animationT = ((now - animationStartMs).toFloat() / animationDurationMs).coerceIn(0f, 1f)
 
         crosswalk?.let { estimate ->
             val rect = boxToView(estimate.box)
@@ -88,7 +102,8 @@ class OverlayView @JvmOverloads constructor(
         }
 
         people.forEach { person ->
-            val rect = boxToView(person.track.box)
+            val drawBox = interpolateBox(personFromBoxes[person.track.id] ?: person.track.box, person.track.box, animationT)
+            val rect = boxToView(drawBox)
             val color = when (person.state) {
                 PersonState.CROSSING -> Color.rgb(255, 91, 91)
                 PersonState.WAITING -> Color.rgb(255, 191, 72)
@@ -103,7 +118,8 @@ class OverlayView @JvmOverloads constructor(
         }
 
         visuals.forEach { visual ->
-            val rect = boxToView(visual.track.box)
+            val drawBox = interpolateBox(vehicleFromBoxes[visual.track.id] ?: visual.track.box, visual.track.box, animationT)
+            val rect = boxToView(drawBox)
             val color = when (visual.state) {
                 VehicleState.PARKED -> Color.rgb(66, 216, 154)
                 VehicleState.MOVING -> Color.rgb(74, 168, 255)
@@ -115,7 +131,7 @@ class OverlayView @JvmOverloads constructor(
             boxPaint.strokeWidth = if (visual.state == VehicleState.PARKED) dp(3f) else dp(2.2f)
             canvas.drawRoundRect(rect, dp(7f), dp(7f), boxPaint)
 
-            val bottom = normalizedToView(visual.track.bottomCenter)
+            val bottom = normalizedToView(drawBox.bottomCenter)
             dotPaint.color = color
             canvas.drawCircle(bottom.x, bottom.y, dp(3.5f), dotPaint)
 
@@ -125,6 +141,17 @@ class OverlayView @JvmOverloads constructor(
             val label = "#${visual.track.id} · ${visual.track.vehicleClass.he} · ${visual.state.he} · ${conf}%$suffix"
             drawLabel(canvas, label, rect.left, rect.top, color)
         }
+        if (animationT < 1f) postInvalidateOnAnimation()
+    }
+
+    private fun interpolateBox(from: Box, to: Box, t: Float): Box {
+        val a = t.coerceIn(0f, 1f)
+        return Box(
+            left = from.left + (to.left - from.left) * a,
+            top = from.top + (to.top - from.top) * a,
+            right = from.right + (to.right - from.right) * a,
+            bottom = from.bottom + (to.bottom - from.bottom) * a
+        )
     }
 
     private fun frameRect(): RectF {

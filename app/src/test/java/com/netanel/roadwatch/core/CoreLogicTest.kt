@@ -199,4 +199,27 @@ class CoreLogicTest {
         assertEquals(1, result.yieldRiskNow)
     }
 
+    @Test
+    fun tinyDetectorJitterDoesNotTurnParkedCarIntoMoving() {
+        val engine = VehicleStateEngine(
+            parkingDwellMs = 600L,
+            stoppingDwellMs = 150L,
+            movingDwellMs = 180L,
+            motionSampleMs = 100L
+        )
+        var now = 0L
+        fun snap(x: Float) = TrackSnapshot(
+            31, Box(x, .2f, x + .1f, .3f), VehicleClass.CAR, .82f,
+            0f, Vec2(0f, 0f), now, now, 5, motionScore = .03f
+        )
+
+        var result = engine.update(listOf(snap(.200f)), now)
+        for (x in listOf(.202f, .199f, .201f, .200f, .201f, .199f, .200f)) {
+            now += 120L
+            result = engine.update(listOf(snap(x)), now)
+        }
+        assertEquals(VehicleState.PARKED, result.first.first().state)
+        assertEquals(0, result.second.movingNow)
+    }
+
 }

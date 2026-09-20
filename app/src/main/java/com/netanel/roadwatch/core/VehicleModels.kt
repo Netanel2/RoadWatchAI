@@ -59,7 +59,8 @@ data class TrackSnapshot(
     val velocity: Vec2,
     val ageMs: Long,
     val lastSeenMs: Long,
-    val hits: Int
+    val hits: Int,
+    val motionScore: Float = 0f
 ) {
     val bottomCenter: Vec2 get() = box.bottomCenter
 }

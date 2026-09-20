@@ -153,6 +153,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
             vehicleTracker.reset()
             personTracker.reset()
             crosswalkLock.reset()
+            detector.setCrosswalkSearchEnabled(true)
             lastPersistedDaily = stateEngine.dailyCounts()
             lastMetrics = DashboardMetrics()
             updateDashboard(lastMetrics, null, null)
@@ -273,14 +274,23 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     override fun onReady(delegateName: String) {
         detectorReady = true
         delegateLabel = delegateName
-        runOnUiThread { setStatus("V7 מוכן ✓ לומד מעבר חציה ואנשים") }
+        runOnUiThread { setStatus("V8 מוכן ✓ FAST TRACK + AUTO SCENE") }
     }
 
     override fun onResult(result: VehicleDetector.Result) {
         val vehicleTracks = vehicleTracker.update(result.detections, result.timestampMs)
         val (vehicleVisuals, baseMetrics) = stateEngine.update(vehicleTracks, result.timestampMs)
 
+        if (result.sceneChanged) {
+            vehicleTracker.reset()
+            personTracker.reset()
+            stateEngine.resetTrackingState()
+            crosswalkLock.reset()
+            detector.setCrosswalkSearchEnabled(true)
+        }
+
         val crosswalkState = crosswalkLock.update(result.crosswalk, result.timestampMs)
+        detector.setCrosswalkSearchEnabled(!crosswalkState.locked)
         val personTracks = personTracker.update(result.personDetections, result.timestampMs)
         val behavior = pedestrianYieldEngine.update(
             personTracks = personTracks,
@@ -313,10 +323,11 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
             )
             updateDashboard(metrics, result, crosswalkState)
             txtStatus.text = when {
+                result.sceneChanged -> "NEW SCENE · לומד מחדש אוטומטית"
                 metrics.yieldRiskNow > 0 -> "⚠ חשד: רכב בתנועה ליד הולך רגל במעבר"
                 metrics.peopleInCrosswalkNow > 0 -> "מעבר פעיל · ${metrics.peopleInCrosswalkNow} חוצים"
-                crosswalkState.locked -> "V7 · מעבר חציה LOCKED · אנשים ${metrics.peopleNow}"
-                else -> "V7 · לומד מעבר חציה · ${crosswalkState.stableHits}/6"
+                crosswalkState.locked -> "V8 FAST · מעבר LOCKED · אנשים ${metrics.peopleNow}"
+                else -> "V8 FAST · לומד סצנה · מעבר ${crosswalkState.stableHits}/6"
             }
         }
     }

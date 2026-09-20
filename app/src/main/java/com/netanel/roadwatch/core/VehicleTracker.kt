@@ -1,18 +1,27 @@
 package com.netanel.roadwatch.core
 
+import java.util.ArrayDeque
+import kotlin.math.hypot
 import kotlin.math.max
 
 /**
- * Lightweight two-stage tracker inspired by ByteTrack's central idea:
- * associate high-confidence detections first, then use lower-confidence detections
- * to rescue already established tracks. This is intentionally self-contained and
- * deterministic for mobile use.
+ * V8 temporal vehicle tracker.
+ *
+ * The old tracker estimated motion from two adjacent detector boxes. On a distant
+ * parked car, a one-pixel YOLO wobble could therefore look like real movement.
+ * V8 keeps a short centre history (similar to the Python speed-tracking demos) and
+ * derives motion from a longer baseline. This makes the overlay calmer and gives
+ * the state engine a much better signal without requiring more detector FPS.
  */
 class VehicleTracker(
     private val highConfidence: Float = 0.42f,
     private val newTrackConfidence: Float = 0.32f,
-    private val maxMissingMs: Long = 2600L
+    private val maxMissingMs: Long = 2600L,
+    private val historyWindowMs: Long = 1600L,
+    private val speedBaselineMs: Long = 500L
 ) {
+    private data class Sample(val timeMs: Long, val point: Vec2)
+
     private data class MutableTrack(
         val id: Int,
         var box: Box,
@@ -20,9 +29,11 @@ class VehicleTracker(
         var confidence: Float,
         var velocity: Vec2,
         var speed: Float,
+        var motionScore: Float,
         var firstSeenMs: Long,
         var lastSeenMs: Long,
         var hits: Int,
+        val history: ArrayDeque<Sample> = ArrayDeque(),
         val classVotes: MutableMap<VehicleClass, Float> = mutableMapOf()
     )
 
@@ -42,17 +53,12 @@ class VehicleTracker(
 
         val unmatchedTrackIds = tracks.keys.toMutableSet()
         val unmatchedHigh = high.indices.toMutableSet()
-
         associate(high, unmatchedTrackIds, unmatchedHigh, timestampMs, rescueStage = false)
 
-        // Second stage: lower-confidence detections may rescue any unmatched track,
-        // including a one-hit tentative track from the previous frame.
         val rescueTrackIds = unmatchedTrackIds.toMutableSet()
         val unmatchedLow = low.indices.toMutableSet()
         associate(low, rescueTrackIds, unmatchedLow, timestampMs, rescueStage = true)
 
-        // Unmatched detections may create tentative tracks. They are not shown/countable
-        // until the state engine sees multiple hits, which filters one-frame false positives.
         unmatchedHigh.forEach { index ->
             val detection = high[index]
             if (detection.confidence >= newTrackConfidence) createTrack(detection, timestampMs)
@@ -89,7 +95,6 @@ class VehicleTracker(
         candidates.sortBy { it.cost }
         val usedTracks = mutableSetOf<Int>()
         val usedDetections = mutableSetOf<Int>()
-
         for (candidate in candidates) {
             if (candidate.trackId in usedTracks || candidate.detectionIndex in usedDetections) continue
             val track = tracks[candidate.trackId] ?: continue
@@ -128,21 +133,36 @@ class VehicleTracker(
     }
 
     private fun updateTrack(track: MutableTrack, detection: Detection, timestampMs: Long) {
-        val previousCenter = track.box.center
-        val dt = max(0.033f, (timestampMs - track.lastSeenMs) / 1000f)
+        val measuredCenter = detection.box.center
+        track.history.addLast(Sample(timestampMs, measuredCenter))
+        while (track.history.size > 2 && timestampMs - track.history.first.timeMs > historyWindowMs) {
+            track.history.removeFirst()
+        }
+
+        val targetTime = timestampMs - speedBaselineMs
+        val reference = track.history.lastOrNull { it.timeMs <= targetTime } ?: track.history.first()
+        val dt = max(0.08f, (timestampMs - reference.timeMs) / 1000f)
         val rawVelocity = Vec2(
-            (detection.box.center.x - previousCenter.x) / dt,
-            (detection.box.center.y - previousCenter.y) / dt
-        )
-        val velocityAlpha = 0.34f
-        val smoothedVelocity = Vec2(
-            track.velocity.x * (1f - velocityAlpha) + rawVelocity.x * velocityAlpha,
-            track.velocity.y * (1f - velocityAlpha) + rawVelocity.y * velocityAlpha
+            (measuredCenter.x - reference.point.x) / dt,
+            (measuredCenter.y - reference.point.y) / dt
         )
 
-        track.velocity = smoothedVelocity
-        track.speed = smoothedVelocity.distanceTo(Vec2(0f, 0f))
-        track.box = track.box.blend(detection.box, 0.66f).clamp01()
+        // Long-baseline velocity is already much less noisy; a small EMA removes
+        // the remaining box wobble without causing a large lag on real cars.
+        val alpha = 0.28f
+        track.velocity = Vec2(
+            track.velocity.x * (1f - alpha) + rawVelocity.x * alpha,
+            track.velocity.y * (1f - alpha) + rawVelocity.y * alpha
+        )
+        track.speed = track.velocity.distanceTo(Vec2(0f, 0f))
+
+        val diagonal = max(0.025f, hypot(detection.box.width, detection.box.height))
+        val baselineDisplacement = reference.point.distanceTo(measuredCenter)
+        val instantaneousScore = (baselineDisplacement / diagonal).coerceIn(0f, 4f)
+        track.motionScore = track.motionScore * 0.70f + instantaneousScore * 0.30f
+
+        // More conservative box smoothing than V7: labels stay visually stable.
+        track.box = track.box.blend(detection.box, 0.48f).clamp01()
         track.confidence = detection.confidence
         track.lastSeenMs = timestampMs
         track.hits += 1
@@ -153,6 +173,8 @@ class VehicleTracker(
 
     private fun createTrack(detection: Detection, timestampMs: Long) {
         val id = nextId++
+        val history = ArrayDeque<Sample>()
+        history.addLast(Sample(timestampMs, detection.box.center))
         tracks[id] = MutableTrack(
             id = id,
             box = detection.box.clamp01(),
@@ -160,18 +182,20 @@ class VehicleTracker(
             confidence = detection.confidence,
             velocity = Vec2(0f, 0f),
             speed = 0f,
+            motionScore = 0f,
             firstSeenMs = timestampMs,
             lastSeenMs = timestampMs,
             hits = 1,
+            history = history,
             classVotes = mutableMapOf(detection.vehicleClass to detection.confidence)
         )
     }
 
     private fun expire(timestampMs: Long) {
-        val expired = tracks.values
+        tracks.values
             .filter { timestampMs - it.lastSeenMs > maxMissingMs }
             .map { it.id }
-        expired.forEach(tracks::remove)
+            .forEach(tracks::remove)
     }
 
     private fun MutableTrack.snapshot(nowMs: Long): TrackSnapshot = TrackSnapshot(
@@ -183,6 +207,7 @@ class VehicleTracker(
         velocity = velocity,
         ageMs = nowMs - firstSeenMs,
         lastSeenMs = lastSeenMs,
-        hits = hits
+        hits = hits,
+        motionScore = motionScore
     )
 }

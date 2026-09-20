@@ -52,7 +52,8 @@ class VehicleDetector(
         val rotatedWidth: Int,
         val rotatedHeight: Int,
         val timestampMs: Long,
-        val engineLabel: String
+        val engineLabel: String,
+        val sceneChanged: Boolean = false
     )
 
     private enum class Source { GENERAL, AERIAL }
@@ -94,6 +95,10 @@ class VehicleDetector(
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val rotationMatrix = Matrix()
     private var frameNumber = 0L
+    private var lastInferenceStartedMs = 0L
+    private var sceneBaseline: FloatArray? = null
+    private var sceneMismatchChecks = 0
+    @Volatile private var crosswalkSearchEnabled = true
     @Volatile private var ready = false
 
     fun initialize() {
@@ -132,6 +137,10 @@ class VehicleDetector(
         listener.onReady(engineLabel())
     }
 
+    fun setCrosswalkSearchEnabled(enabled: Boolean) {
+        crosswalkSearchEnabled = enabled
+    }
+
     fun analyze(imageProxy: ImageProxy) {
         if (!ready) {
             imageProxy.close()
@@ -139,6 +148,13 @@ class VehicleDetector(
         }
 
         val frameTimestamp = SystemClock.uptimeMillis()
+        // Keep the camera preview independent and smooth. The AI does not need to
+        // process every sensor frame; tracking history fills the gaps.
+        if (frameTimestamp - lastInferenceStartedMs < MIN_INFERENCE_INTERVAL_MS) {
+            imageProxy.close()
+            return
+        }
+        lastInferenceStartedMs = frameTimestamp
         try {
             val frameWidth = imageProxy.width
             val frameHeight = imageProxy.height
@@ -151,6 +167,8 @@ class VehicleDetector(
             val oriented = orientFrame(bitmap, rotation)
             val rotatedWidth = oriented.width
             val rotatedHeight = oriented.height
+            val sceneChanged = detectSceneChange(oriented)
+            if (sceneChanged) crosswalkSearchEnabled = true
 
             val ref = general ?: aerial ?: error("No detector available")
             val letterbox = letterbox(oriented, ref.inputWidth, ref.inputHeight)
@@ -175,8 +193,10 @@ class VehicleDetector(
 
             val generalCandidates = generalDecoded.vehicles
 
-            val shouldRunAerial = aerial != null &&
-                (generalCandidates.isEmpty() || frameNumber % 2L == 0L)
+            val shouldRunAerial = aerial != null && (
+                (generalCandidates.isEmpty() && frameNumber % 2L == 0L) ||
+                    frameNumber % AERIAL_EVERY_N == 0L
+                )
 
             val aerialCandidates: List<Candidate>
             val aerialMs: Long
@@ -196,7 +216,11 @@ class VehicleDetector(
             // The full-frame pass stays in place, but the tile makes pedestrians roughly
             // 1.8x larger to YOLO. Four tiles are cycled, so the tracker receives a
             // refreshed high-resolution observation of every part of the scene.
-            val tiledPeople = if (generalRunner != null) {
+            val tiledPeople = if (
+                generalRunner != null &&
+                generalDecoded.people.isEmpty() &&
+                frameNumber % PERSON_TILE_EVERY_N == 0L
+            ) {
                 detectPeopleInTile(oriented, generalRunner, frameNumber)
             } else {
                 emptyList()
@@ -206,7 +230,11 @@ class VehicleDetector(
             val fused = fuse(generalCandidates + aerialCandidates)
                 .map { Detection(it.box, it.vehicleClass, it.confidence) }
 
-            val crosswalk = estimateCrosswalk(oriented)
+            val crosswalk = if (crosswalkSearchEnabled && frameNumber % CROSSWALK_SCAN_EVERY_N == 0L) {
+                estimateCrosswalk(oriented)
+            } else {
+                null
+            }
             val totalMs = SystemClock.elapsedRealtime() - start
             listener.onResult(
                 Result(
@@ -221,7 +249,8 @@ class VehicleDetector(
                     rotatedWidth = rotatedWidth,
                     rotatedHeight = rotatedHeight,
                     timestampMs = frameTimestamp,
-                    engineLabel = engineLabel()
+                    engineLabel = engineLabel(),
+                    sceneChanged = sceneChanged
                 )
             )
         } catch (t: Throwable) {
@@ -732,6 +761,60 @@ class VehicleDetector(
      * than the V5 row-only detector. The result is intentionally stabilized by
      * CrosswalkLock before it is used by behavior logic.
      */
+    /**
+     * Detect a material camera/scene move from a tiny normalized luminance grid.
+     * Global exposure changes are mostly cancelled by subtracting the frame mean,
+     * while a new street / large pan changes the spatial pattern.
+     */
+    private fun detectSceneChange(bitmap: Bitmap): Boolean {
+        if (frameNumber % SCENE_CHECK_EVERY_N != 0L) return false
+        val signature = sceneSignature(bitmap)
+        val baseline = sceneBaseline
+        if (baseline == null || baseline.size != signature.size) {
+            sceneBaseline = signature
+            sceneMismatchChecks = 0
+            return false
+        }
+
+        var diff = 0f
+        for (i in signature.indices) diff += kotlin.math.abs(signature[i] - baseline[i])
+        diff /= signature.size.coerceAtLeast(1)
+
+        if (diff >= SCENE_CHANGE_THRESHOLD) {
+            sceneMismatchChecks++
+            if (sceneMismatchChecks >= SCENE_CHANGE_CONFIRMATIONS) {
+                sceneBaseline = signature
+                sceneMismatchChecks = 0
+                return true
+            }
+        } else {
+            sceneMismatchChecks = 0
+            for (i in baseline.indices) baseline[i] = baseline[i] * 0.97f + signature[i] * 0.03f
+        }
+        return false
+    }
+
+    private fun sceneSignature(bitmap: Bitmap): FloatArray {
+        val cols = 6
+        val rows = 4
+        val values = FloatArray(cols * rows)
+        var mean = 0f
+        var index = 0
+        for (row in 0 until rows) {
+            val y = (((row + 0.5f) / rows) * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+            for (col in 0 until cols) {
+                val x = (((col + 0.5f) / cols) * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+                val pixel = bitmap.getPixel(x, y)
+                val lum = (Color.red(pixel) * 0.299f + Color.green(pixel) * 0.587f + Color.blue(pixel) * 0.114f) / 255f
+                values[index++] = lum
+                mean += lum
+            }
+        }
+        mean /= values.size
+        for (i in values.indices) values[i] -= mean
+        return values
+    }
+
     private fun estimateCrosswalk(bitmap: Bitmap): CrosswalkEstimate? {
         val horizontal = estimateStripeCluster(bitmap, scanRows = true)
         val vertical = estimateStripeCluster(bitmap, scanRows = false)
@@ -964,6 +1047,9 @@ class VehicleDetector(
         modelBitmap = null
         packedBuffer = null
         rowBytes = ByteArray(0)
+        lastInferenceStartedMs = 0L
+        sceneBaseline = null
+        sceneMismatchChecks = 0
     }
 
     private class LiteRtRunner(
@@ -1123,6 +1209,13 @@ class VehicleDetector(
         private const val AERIAL_CONF = 0.34f
         private const val PERSON_CONF = 0.18f
         private const val PERSON_CLASS_ID = 0
+        private const val MIN_INFERENCE_INTERVAL_MS = 90L // ~11 AI FPS; preview stays native-speed
+        private const val AERIAL_EVERY_N = 4L
+        private const val PERSON_TILE_EVERY_N = 2L
+        private const val CROSSWALK_SCAN_EVERY_N = 2L
+        private const val SCENE_CHECK_EVERY_N = 8L
+        private const val SCENE_CHANGE_THRESHOLD = 0.16f
+        private const val SCENE_CHANGE_CONFIRMATIONS = 3
 
         // Overlapping 2x2 scene tiles for the extra small-person pass.
         private val PERSON_TILES = listOf(

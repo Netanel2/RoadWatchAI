@@ -1,31 +1,28 @@
 package com.netanel.roadwatch.core
 
 import java.time.LocalDate
+import kotlin.math.hypot
 import kotlin.math.max
 
 /**
- * V4 automatic scene state engine.
+ * V8 history-based motion state engine.
  *
- * No user drawn road / parking / tripwire is required. A fixed camera can infer
- * the useful states from persistent tracks:
- *  - PARKED: a confirmed vehicle stays spatially stable for several seconds.
- *  - MOVING: the vehicle changes position by more than detector jitter.
- *  - PASSED TODAY: a confirmed track travels a meaningful distance once.
- *  - PARKED TODAY: a vehicle that was moving later becomes parked.
- *  - LEFT PARKING: a parked vehicle starts moving again.
- *
- * Motion is measured over a sampling window instead of frame-to-frame speed so
- * bounding-box jitter at 20-30 FPS does not turn parked cars into moving cars.
+ * State changes are intentionally slower than detector updates. A vehicle must
+ * demonstrate sustained relative displacement (normalised by its own box size)
+ * before it becomes MOVING. This is the same principle used by smooth speed
+ * tracking demos: track history first, classify motion second.
  */
 class VehicleStateEngine(
-    private val parkingDwellMs: Long = 4_500L,
-    private val stoppingDwellMs: Long = 1_200L,
-    private val movingDwellMs: Long = 250L,
-    private val motionSampleMs: Long = 350L,
+    private val parkingDwellMs: Long = 3_500L,
+    private val stoppingDwellMs: Long = 900L,
+    private val movingDwellMs: Long = 500L,
+    private val motionSampleMs: Long = 420L,
     private val stationaryDisplacementMax: Float = 0.009f,
     private val movingDisplacementMin: Float = 0.017f,
     private val passDisplacementMin: Float = 0.055f,
-    private val evidenceFreshnessMs: Long = 700L
+    private val evidenceFreshnessMs: Long = 900L,
+    private val stationaryRelativeMax: Float = 0.10f,
+    private val movingRelativeMin: Float = 0.20f
 ) {
     private data class Memory(
         var state: VehicleState = VehicleState.UNKNOWN,
@@ -106,9 +103,7 @@ class VehicleStateEngine(
             .map { track -> updateTrack(track, nowMs) }
 
         val parkedNow = visuals.count { it.state == VehicleState.PARKED }
-        val movingNow = visuals.count {
-            it.state == VehicleState.MOVING || it.state == VehicleState.LEAVING
-        }
+        val movingNow = visuals.count { it.state == VehicleState.MOVING || it.state == VehicleState.LEAVING }
         val current = visuals.map { it.track }
 
         val metrics = DashboardMetrics(
@@ -127,7 +122,6 @@ class VehicleStateEngine(
         return visuals to metrics
     }
 
-    /** Compatibility overload for older callers/tests. V4 intentionally ignores manual zones. */
     fun update(
         tracks: List<TrackSnapshot>,
         @Suppress("UNUSED_PARAMETER") zones: ZoneConfig,
@@ -155,23 +149,25 @@ class VehicleStateEngine(
         val elapsed = nowMs - mem.sampleTimeMs
         if (elapsed >= motionSampleMs) {
             val displacement = samplePoint.distanceTo(point)
+            val objectScale = max(0.035f, hypot(track.box.width, track.box.height))
+            val relativeDisplacement = displacement / objectScale
+
+            // V8 uses both the long-history tracker score and a fresh sample.
+            // A parked box must remain clearly quiet; ambiguous motion sits in a
+            // hysteresis band and does not immediately flip the state.
+            val motionEvidence = max(relativeDisplacement, track.motionScore)
             when {
-                displacement >= movingDisplacementMin -> {
-                    if (mem.highMotionSinceMs == null) {
-                        // The displacement happened throughout this sample window.
-                        mem.highMotionSinceMs = nowMs - elapsed
-                    }
+                motionEvidence >= movingRelativeMin || displacement >= movingDisplacementMin * 1.6f -> {
+                    if (mem.highMotionSinceMs == null) mem.highMotionSinceMs = nowMs - elapsed
                     mem.lowMotionSinceMs = null
                 }
-                displacement <= stationaryDisplacementMax -> {
-                    if (mem.lowMotionSinceMs == null) {
-                        mem.lowMotionSinceMs = nowMs - elapsed
-                    }
+                motionEvidence <= stationaryRelativeMax && displacement <= stationaryDisplacementMax * 1.5f -> {
+                    if (mem.lowMotionSinceMs == null) mem.lowMotionSinceMs = nowMs - elapsed
                     mem.highMotionSinceMs = null
                 }
                 else -> {
-                    // Hysteresis band: keep the previous evidence briefly instead of
-                    // toggling state because of normal detector box noise.
+                    // Do not reset both clocks for one ambiguous sample. Instead let
+                    // existing evidence decay naturally on the next clear sample.
                 }
             }
             mem.samplePoint = point
@@ -190,8 +186,8 @@ class VehicleStateEngine(
             highForMs >= movingDwellMs -> VehicleState.MOVING
             lowForMs >= parkingDwellMs -> VehicleState.PARKED
             lowForMs >= stoppingDwellMs -> VehicleState.STOPPING
-            oldState == VehicleState.MOVING && mem.highMotionSinceMs != null -> VehicleState.MOVING
-            oldState == VehicleState.LEAVING && mem.highMotionSinceMs != null -> VehicleState.LEAVING
+            oldState == VehicleState.MOVING && mem.highMotionSinceMs != null && highForMs < movingDwellMs * 3 -> VehicleState.MOVING
+            oldState == VehicleState.LEAVING && mem.highMotionSinceMs != null && highForMs < movingDwellMs * 3 -> VehicleState.LEAVING
             else -> VehicleState.UNKNOWN
         }
 
@@ -200,8 +196,6 @@ class VehicleStateEngine(
             mem.stateSinceMs = nowMs
 
             if (nextState == VehicleState.PARKED && !mem.parkedEventSent) {
-                // A car already parked when the app starts is PARKED NOW, but it does
-                // not become a false PARKED TODAY event unless movement was observed.
                 if (mem.everMoving) parkedToday++
                 mem.parkedEventSent = true
                 mem.leftEventSent = false
@@ -218,10 +212,8 @@ class VehicleStateEngine(
             }
         }
 
-        // Automatic traffic counter: count a confirmed moving track once after it
-        // has travelled enough of the frame to be clearly more than box jitter.
         if (!mem.countedPass && mem.everMoving && mem.maxDisplacement >= passDisplacementMin) {
-            recentPasses.removeAll { nowMs - it.timeMs > 850L }
+            recentPasses.removeAll { nowMs - it.timeMs > 900L }
             val duplicate = recentPasses.any {
                 it.vehicleClass == track.vehicleClass && it.point.distanceTo(point) < 0.07f
             }

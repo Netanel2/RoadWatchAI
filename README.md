@@ -1,3 +1,12 @@
+# עדכון V10 — מעבר חציה ומהירות
+
+גרסת המקור עודכנה ל־10.0.0-beta. הוראות הפעלה, כיול, פקודות Git ומגבלות: [V10_UPGRADE.md](V10_UPGRADE.md).
+תוצאות בדיקה: [docs/VALIDATION_V10.md](docs/VALIDATION_V10.md).
+
+הספירה החדשה היא של **חשדות לאי־מתן זכות קדימה**, והמהירות היא **הערכה לאחר כיול מדוד** בלבד.
+
+---
+
 # RoadWatch AI V2 — Native Android
 
 Professional on-device vehicle analytics for a fixed phone camera. The app is designed to keep the camera preview smooth while independently detecting, tracking and classifying vehicle state over time.

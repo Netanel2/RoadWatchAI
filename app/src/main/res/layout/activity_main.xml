@@ -49,7 +49,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="V9.1 · CROSSWALK + FAST PASS"
+                    android:text="V10 · CROSSWALK + SPEED"
                     android:textColor="@color/rw_blue"
                     android:textSize="9sp"
                     android:textStyle="bold" />
@@ -59,10 +59,24 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:maxLines="1"
-                    android:text="מאתחל V6 Scene AI..."
+                    android:text="מאתחל V10 Scene AI..."
                     android:textColor="@color/rw_muted"
                     android:textSize="11sp" />
 
+                <TextView
+                    android:id="@+id/txtSafetyStats"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="חשדות היום: 0 · שיא משוער: — · נדרש כיול"
+                    android:textColor="#FFCF70"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSetup"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:text="מעבר חציה / כיול מהירות"
+                    android:textSize="11sp" />
                 <TextView
                     android:id="@+id/txtCrosswalkLock"
                     android:layout_width="wrap_content"

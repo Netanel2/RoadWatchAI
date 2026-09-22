@@ -51,6 +51,7 @@ class PersonTracker(
                     track.box.center.y + track.velocity.y * dt
                 )
                 val dist = predicted.distanceTo(det.box.center)
+                if (dist > maxOf(.035f, track.box.height * .65f) + minOf(.06f, track.speed * dt)) continue
                 val iou = track.box.iou(det.box)
                 val distanceNorm = (dist / 0.18f).coerceIn(0f, 1.5f)
                 val confidencePenalty = if (det.confidence < highConfidence) 0.05f else 0f

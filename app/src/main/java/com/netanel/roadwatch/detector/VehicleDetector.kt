@@ -53,7 +53,8 @@ class VehicleDetector(
         val rotatedHeight: Int,
         val timestampMs: Long,
         val engineLabel: String,
-        val sceneChanged: Boolean = false
+        val sceneChanged: Boolean = false,
+        val analysisFps: Float = 0f
     )
 
     private enum class Source { GENERAL, AERIAL }
@@ -95,7 +96,14 @@ class VehicleDetector(
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val rotationMatrix = Matrix()
     private var frameNumber = 0L
+    private val zebraDetector = com.netanel.roadwatch.core.ZebraDetector()
+    private var lastExtraMs = 0L
+    private var lastCrosswalkScanMs = 0L
+    private var sensorOriginNs = 0L
+    private var clockOriginMs = 0L
+    @Volatile var pedestrianRegion: Box? = null
     private var lastInferenceStartedMs = 0L
+    private var analysisFps = 0f
     private var sceneBaseline: FloatArray? = null
     private var sceneMismatchChecks = 0
     @Volatile private var crosswalkSearchEnabled = true
@@ -137,6 +145,8 @@ class VehicleDetector(
         listener.onReady(engineLabel())
     }
 
+    fun resetFrameClock() { sensorOriginNs = 0L; lastInferenceStartedMs = 0L }
+
     fun setCrosswalkSearchEnabled(enabled: Boolean) {
         crosswalkSearchEnabled = enabled
     }
@@ -147,14 +157,21 @@ class VehicleDetector(
             return
         }
 
-        val frameTimestamp = SystemClock.uptimeMillis()
+        val sensorNs = imageProxy.imageInfo.timestamp
+        if (sensorOriginNs == 0L) { sensorOriginNs = sensorNs; clockOriginMs = SystemClock.elapsedRealtime() }
+        val frameTimestamp = clockOriginMs + (sensorNs - sensorOriginNs) / 1_000_000L
         // Keep the camera preview independent and smooth. The AI does not need to
         // process every sensor frame; tracking history fills the gaps.
         if (frameTimestamp - lastInferenceStartedMs < MIN_INFERENCE_INTERVAL_MS) {
             imageProxy.close()
             return
         }
+        if (lastInferenceStartedMs > 0 && frameTimestamp > lastInferenceStartedMs) {
+            val instantFps = 1000f / (frameTimestamp - lastInferenceStartedMs)
+            analysisFps = if (analysisFps == 0f) instantFps else analysisFps * .75f + instantFps * .25f
+        }
         lastInferenceStartedMs = frameTimestamp
+        val pipelineStart = SystemClock.elapsedRealtime()
         try {
             val frameWidth = imageProxy.width
             val frameHeight = imageProxy.height
@@ -175,7 +192,6 @@ class VehicleDetector(
             preparePixels(ref.inputWidth, ref.inputHeight)
 
             frameNumber++
-            val start = SystemClock.elapsedRealtime()
 
             val generalRunner = general
             val generalDecoded: GeneralDecoded
@@ -193,20 +209,22 @@ class VehicleDetector(
 
             val generalCandidates = generalDecoded.vehicles
 
-            val shouldRunAerial = aerial != null && (
-                (generalCandidates.isEmpty() && frameNumber % 2L == 0L) ||
-                    frameNumber % AERIAL_EVERY_N == 0L
-                )
+            val extraDue = frameTimestamp - lastExtraMs >= maxOf(550L, generalMs * 6L)
+            val shouldRunAerial = aerial != null && (generalRunner == null ||
+                (extraDue && frameNumber % AERIAL_EVERY_N == 0L))
 
             val aerialCandidates: List<Candidate>
             val aerialMs: Long
             val aerialRunner = aerial
             if (shouldRunAerial && aerialRunner != null) {
+                lastExtraMs = frameTimestamp
+                val aerialLetterbox = letterbox(oriented, aerialRunner.inputWidth, aerialRunner.inputHeight)
+                preparePixels(aerialRunner.inputWidth, aerialRunner.inputHeight)
                 val input = inputFor(aerialRunner)
                 val t0 = SystemClock.elapsedRealtime()
                 val outputs = aerialRunner.run(input)
                 aerialMs = SystemClock.elapsedRealtime() - t0
-                aerialCandidates = decodeAerial(aerialRunner, outputs, letterbox)
+                aerialCandidates = decodeAerial(aerialRunner, outputs, aerialLetterbox)
             } else {
                 aerialMs = 0L
                 aerialCandidates = emptyList()
@@ -218,9 +236,10 @@ class VehicleDetector(
             // refreshed high-resolution observation of every part of the scene.
             val tiledPeople = if (
                 generalRunner != null &&
-                generalDecoded.people.isEmpty() &&
+                !shouldRunAerial && extraDue &&
                 frameNumber % PERSON_TILE_EVERY_N == 0L
             ) {
+                lastExtraMs = frameTimestamp
                 detectPeopleInTile(oriented, generalRunner, frameNumber)
             } else {
                 emptyList()
@@ -230,17 +249,13 @@ class VehicleDetector(
             val fused = fuse(generalCandidates + aerialCandidates)
                 .map { Detection(it.box, it.vehicleClass, it.confidence) }
 
-            val crosswalkScanEvery = if (crosswalkSearchEnabled) {
-                CROSSWALK_SCAN_EVERY_N
-            } else {
-                CROSSWALK_VERIFY_EVERY_N
-            }
-            val crosswalk = if (frameNumber % crosswalkScanEvery == 0L) {
+            val crosswalk = if (frameTimestamp - lastCrosswalkScanMs >= (if (crosswalkSearchEnabled) 350L else 2000L)) {
+                lastCrosswalkScanMs = frameTimestamp
                 estimateCrosswalk(oriented)
             } else {
                 null
             }
-            val totalMs = SystemClock.elapsedRealtime() - start
+            val totalMs = SystemClock.elapsedRealtime() - pipelineStart
             listener.onResult(
                 Result(
                     detections = fused,
@@ -255,7 +270,8 @@ class VehicleDetector(
                     rotatedHeight = rotatedHeight,
                     timestampMs = frameTimestamp,
                     engineLabel = engineLabel(),
-                    sceneChanged = sceneChanged
+                    sceneChanged = sceneChanged,
+                    analysisFps = analysisFps
                 )
             )
         } catch (t: Throwable) {
@@ -421,7 +437,7 @@ class VehicleDetector(
         runner: LiteRtRunner,
         frameIndex: Long
     ): List<PersonDetection> {
-        val region = PERSON_TILES[(((frameIndex - 1L) % PERSON_TILES.size.toLong()).toInt())]
+        val region = pedestrianRegion ?: PERSON_TILES[((frameIndex / PERSON_TILE_EVERY_N) % PERSON_TILES.size).toInt()]
         val tileTransform = letterboxRegion(oriented, region, runner.inputWidth, runner.inputHeight)
         preparePixels(runner.inputWidth, runner.inputHeight)
         val decoded = decodeGeneral(runner, runner.run(inputFor(runner)), tileTransform).people
@@ -821,9 +837,15 @@ class VehicleDetector(
     }
 
     private fun estimateCrosswalk(bitmap: Bitmap): CrosswalkEstimate? {
-        val horizontal = estimateStripeCluster(bitmap, scanRows = true)
-        val vertical = estimateStripeCluster(bitmap, scanRows = false)
-        return listOfNotNull(horizontal, vertical).maxByOrNull { it.confidence }
+        val scale = minOf(1f, 384f / max(bitmap.width, bitmap.height))
+        val small = Bitmap.createScaledBitmap(bitmap, (bitmap.width*scale).toInt(), (bitmap.height*scale).toInt(), true)
+        try {
+            val pixels = IntArray(small.width*small.height)
+            small.getPixels(pixels,0,small.width,0,0,small.width,small.height)
+            val components = zebraDetector.detect(pixels,small.width,small.height)
+            if (components != null) return components
+            return listOfNotNull(estimateStripeCluster(small,true), estimateStripeCluster(small,false)).maxByOrNull { it.confidence }
+        } finally { if (small !== bitmap) small.recycle() }
     }
 
     private fun estimateStripeCluster(bitmap: Bitmap, scanRows: Boolean): CrosswalkEstimate? {
@@ -833,7 +855,7 @@ class VehicleDetector(
 
         val xStart = (width * 0.03f).toInt()
         val xEnd = (width * 0.97f).toInt().coerceAtLeast(xStart + 1)
-        val yStart = (height * 0.28f).toInt()
+        val yStart = (height * 0.04f).toInt()
         val yEnd = (height * 0.96f).toInt().coerceAtLeast(yStart + 1)
         val step = 3
 
@@ -1403,7 +1425,7 @@ class VehicleDetector(
         private const val AERIAL_CONF = 0.34f
         private const val PERSON_CONF = 0.18f
         private const val PERSON_CLASS_ID = 0
-        private const val MIN_INFERENCE_INTERVAL_MS = 90L // ~11 AI FPS; preview stays native-speed
+        private const val MIN_INFERENCE_INTERVAL_MS = 33L // Cap at 30 analysis starts/sec; actual throughput depends on device.
         private const val AERIAL_EVERY_N = 4L
         private const val PERSON_TILE_EVERY_N = 2L
         private const val CROSSWALK_SCAN_EVERY_N = 2L

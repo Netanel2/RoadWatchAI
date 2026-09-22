@@ -12,7 +12,8 @@ class PedestrianYieldEngine {
         personTracks: List<PersonTrackSnapshot>,
         vehicleVisuals: List<TrackVisual>,
         crosswalk: CrosswalkEstimate?,
-        nowMs: Long
+        nowMs: Long,
+        manualZone: Polygon2? = null
     ): Result {
         val confirmedPeople = personTracks.filter {
             val fresh = nowMs - it.lastSeenMs <= 900L
@@ -22,7 +23,7 @@ class PedestrianYieldEngine {
 
         val crosswalkBox = crosswalk?.box
         val peopleVisuals = confirmedPeople.map { track ->
-            val state = classify(track, crosswalkBox)
+            val state = classify(track, crosswalkBox, manualZone)
             PersonVisual(track, state)
         }
 
@@ -49,15 +50,21 @@ class PedestrianYieldEngine {
         )
     }
 
-    private fun classify(track: PersonTrackSnapshot, crosswalk: Box?): PersonState {
+    private fun classify(track: PersonTrackSnapshot, crosswalk: Box?, manualZone: Polygon2?): PersonState {
         if (crosswalk == null) return PersonState.OTHER
 
         val point = track.bottomCenter
-        val inCrossing = crosswalk.expand(0.015f, 0.025f).contains(point) || crosswalk.intersects(track.box)
+        val inCrossing = manualZone?.contains(point) ?: crosswalk.contains(point)
         if (inCrossing) return PersonState.CROSSING
 
-        val waitZone = crosswalk.expand(0.07f, 0.09f)
-        if (waitZone.contains(point) || waitZone.intersects(track.box)) {
+        val zone = manualZone ?: CrosswalkEstimate(crosswalk,1f).polygon()
+        val distance = zone.points.indices.minOf { i ->
+            val a=zone.points[i]; val b=zone.points[(i+1)%zone.points.size]
+            val dx=b.x-a.x; val dy=b.y-a.y
+            val t=(((point.x-a.x)*dx+(point.y-a.y)*dy)/(dx*dx+dy*dy).coerceAtLeast(1e-8f)).coerceIn(0f,1f)
+            point.distanceTo(Vec2(a.x+t*dx,a.y+t*dy))
+        }
+        if (distance <= .055f) {
             return if (track.speed <= 0.025f) PersonState.WAITING else PersonState.APPROACHING
         }
 

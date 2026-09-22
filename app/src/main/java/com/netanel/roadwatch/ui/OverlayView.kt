@@ -9,6 +9,8 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import android.view.MotionEvent
+import com.netanel.roadwatch.core.Polygon2
 import com.netanel.roadwatch.core.Box
 import com.netanel.roadwatch.core.CrosswalkEstimate
 import com.netanel.roadwatch.core.PersonState
@@ -32,7 +34,32 @@ class OverlayView @JvmOverloads constructor(
     private var vehicleFromBoxes: Map<Int, Box> = emptyMap()
     private var personFromBoxes: Map<Int, Box> = emptyMap()
     private var animationStartMs = 0L
-    private val animationDurationMs = 95L
+    private val animationDurationMs = 1L
+    var speedKmh: Map<Int, Float> = emptyMap()
+    var manualPolygon: Polygon2? = null
+    var calibrationPolygon: Polygon2? = null
+    private var selection: ((List<Vec2>) -> Unit)? = null
+    private val selected = mutableListOf<Vec2>()
+    fun selectFourCorners(done: (List<Vec2>) -> Unit) {
+        selected.clear(); selection = done; invalidate()
+    }
+    fun cancelSelection() { selection = null; selected.clear(); invalidate() }
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (selection == null) return false
+        if (event.action == MotionEvent.ACTION_UP) {
+            val frame = frameRect()
+            if (frame.contains(event.x,event.y)) {
+                selected.add(Vec2((event.x-frame.left)/frame.width(),(event.y-frame.top)/frame.height()))
+                if (selected.size == 4) {
+                    val callback = selection; val points = selected.toList()
+                    selection = null; selected.clear(); callback?.invoke(points)
+                }
+                performClick(); invalidate()
+            }
+        }
+        return true
+    }
+    override fun performClick(): Boolean { super.performClick(); return true }
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -82,16 +109,31 @@ class OverlayView @JvmOverloads constructor(
         this.crosswalkLocked = crosswalkLocked
         imageWidth = rotatedImageWidth.coerceAtLeast(1)
         imageHeight = rotatedImageHeight.coerceAtLeast(1)
-        animationStartMs = android.os.SystemClock.uptimeMillis()
+        animationStartMs = android.os.SystemClock.elapsedRealtime()
         postInvalidateOnAnimation()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val now = android.os.SystemClock.uptimeMillis()
+        val now = android.os.SystemClock.elapsedRealtime()
         val animationT = ((now - animationStartMs).toFloat() / animationDurationMs).coerceIn(0f, 1f)
 
-        crosswalk?.let { estimate ->
+        fun drawPolygon(poly: Polygon2?, color: Int) {
+            if (poly == null || poly.points.isEmpty()) return
+            val path = Path()
+            poly.points.forEachIndexed { i,p -> val v=normalizedToView(p); if(i==0) path.moveTo(v.x,v.y) else path.lineTo(v.x,v.y) }
+            if (poly.points.size >= 3) path.close()
+            crosswalkPaint.color=color; canvas.drawPath(path,crosswalkPaint)
+        }
+        drawPolygon(calibrationPolygon,Color.rgb(130,190,255))
+        drawPolygon(manualPolygon,Color.rgb(80,231,219))
+        drawPolygon(Polygon2(selected),Color.YELLOW)
+        selected.forEachIndexed { i,p ->
+            val v=normalizedToView(p); dotPaint.color=Color.YELLOW
+            canvas.drawCircle(v.x,v.y,dp(5f),dotPaint)
+            drawLabel(canvas,"${i+1}",v.x,v.y,Color.YELLOW)
+        }
+        crosswalk?.takeIf { manualPolygon == null }?.let { estimate ->
             val rect = boxToView(estimate.box)
             crosswalkPaint.color = if (crosswalkLocked) Color.rgb(80, 231, 219) else Color.rgb(125, 176, 210)
             val path = Path().apply { addRoundRect(rect, dp(8f), dp(8f), Path.Direction.CW) }
@@ -101,7 +143,7 @@ class OverlayView @JvmOverloads constructor(
             drawLabel(canvas, "מעבר חציה · $mode · ${conf}%", rect.left, rect.top, crosswalkPaint.color)
         }
 
-        people.forEach { person ->
+        people.filter { now - it.track.lastSeenMs <= 450L }.forEach { person ->
             val drawBox = interpolateBox(personFromBoxes[person.track.id] ?: person.track.box, person.track.box, animationT)
             val rect = boxToView(drawBox)
             val color = when (person.state) {
@@ -117,8 +159,13 @@ class OverlayView @JvmOverloads constructor(
             drawLabel(canvas, "אדם #${person.track.id} · ${person.state.he} · ${conf}%", rect.left, rect.top, color)
         }
 
-        visuals.forEach { visual ->
-            val drawBox = interpolateBox(vehicleFromBoxes[visual.track.id] ?: visual.track.box, visual.track.box, animationT)
+        visuals.filter { now - it.track.lastSeenMs <= 500L }.forEach { visual ->
+            // Bounded display-only prediction compensates inference age; never feeds counters/speed.
+            val age = ((now - visual.track.lastSeenMs).coerceIn(0L,160L) / 1000f)
+            val b = visual.track.box
+            val dx = (visual.track.velocity.x * age).coerceIn(-.06f,.06f)
+            val dy = (visual.track.velocity.y * age).coerceIn(-.06f,.06f)
+            val drawBox = Box(b.left+dx,b.top+dy,b.right+dx,b.bottom+dy).clamp01()
             val rect = boxToView(drawBox)
             val color = when (visual.state) {
                 VehicleState.PARKED -> Color.rgb(66, 216, 154)
@@ -137,11 +184,12 @@ class OverlayView @JvmOverloads constructor(
 
             val conf = (visual.track.confidence * 100f).toInt().coerceIn(0, 100)
             val parkedSeconds = ((now - visual.stateSinceMs).coerceAtLeast(0L) / 1000L)
-            val suffix = if (visual.state == VehicleState.PARKED) " · ${parkedSeconds}s" else ""
+            val suffix = speedKmh[visual.track.id]?.let { " · ≈${it.toInt()} קמ״ש" }
+                ?: if (visual.state == VehicleState.PARKED) " · ${parkedSeconds}s" else ""
             val label = "#${visual.track.id} · ${visual.track.vehicleClass.he} · ${visual.state.he} · ${conf}%$suffix"
             drawLabel(canvas, label, rect.left, rect.top, color)
         }
-        if (animationT < 1f) postInvalidateOnAnimation()
+        if (visuals.any { now - it.track.lastSeenMs < 550L } || people.any { now - it.track.lastSeenMs < 550L }) postInvalidateOnAnimation()
     }
 
     private fun interpolateBox(from: Box, to: Box, t: Float): Box {

@@ -8,8 +8,8 @@ package com.netanel.roadwatch.core
  * observations consistently point somewhere else.
  */
 class CrosswalkLock(
-    private val requiredStableHits: Int = 8,
-    private val candidateTimeoutMs: Long = 2200L,
+    private val requiredStableHits: Int = 4,
+    private val candidateTimeoutMs: Long = 5000L,
     private val lockedRefreshAlpha: Float = 0.06f
 ) {
     data class State(
@@ -39,6 +39,8 @@ class CrosswalkLock(
 
     fun update(rawEstimate: CrosswalkEstimate?, nowMs: Long): State {
         val frameEstimate = rawEstimate?.takeIf { plausible(it.box) }
+        // A stale lock must not survive camera changes or indefinite failed verification.
+        if (locked != null && nowMs - lockedLastSeenMs > 15000L) reset()
         val currentLocked = locked
 
         if (currentLocked != null) {
@@ -52,7 +54,7 @@ class CrosswalkLock(
                 lockedLastSeenMs = nowMs
                 incompatibleCandidate = null
                 incompatibleHits = 0
-            } else if (frameEstimate != null && frameEstimate.confidence >= 0.68f) {
+            } else if (frameEstimate != null && frameEstimate.confidence >= 0.65f) {
                 val previous = incompatibleCandidate
                 if (previous != null && compatible(previous.box, frameEstimate.box)) {
                     incompatibleCandidate = CrosswalkEstimate(
@@ -101,7 +103,7 @@ class CrosswalkLock(
         }
         candidateLastSeenMs = nowMs
 
-        if (candidateHits >= requiredStableHits && (candidate?.confidence ?: 0f) >= 0.68f) {
+        if (candidateHits >= requiredStableHits && (candidate?.confidence ?: 0f) >= 0.65f) {
             locked = candidate
             lockedLastSeenMs = nowMs
             return State(locked, true, candidateHits, lockedLastSeenMs)
@@ -111,9 +113,9 @@ class CrosswalkLock(
     }
 
     private fun plausible(box: Box): Boolean =
-        box.width in 0.08f..0.68f &&
-            box.height in 0.035f..0.50f &&
-            box.area in 0.006f..0.20f
+        box.width in 0.04f..0.94f &&
+            box.height in 0.025f..0.85f &&
+            box.area in 0.003f..0.40f
 
     private fun compatible(a: Box, b: Box): Boolean {
         val iou = a.iou(b)

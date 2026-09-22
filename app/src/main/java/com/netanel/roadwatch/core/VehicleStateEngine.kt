@@ -107,9 +107,9 @@ class VehicleStateEngine(
         // be counted if its displacement is clearly larger than detector jitter.
         tracks.forEach { track -> observeFastPass(track, nowMs) }
 
-        // UI / parked-vs-moving states remain conservative and still require 3 hits.
+        // Show well-supported fast tracks after two observations; weak tracks need three.
         val visuals = tracks
-            .filter { it.hits >= 3 }
+            .filter { it.hits >= 3 || (it.hits >= 2 && it.confidence >= .40f) }
             .map { track -> updateTrack(track, nowMs) }
 
         val parkedNow = visuals.count { it.state == VehicleState.PARKED }

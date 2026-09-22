@@ -120,7 +120,14 @@ class VehicleTracker(
             track.box.center.y + track.velocity.y * dt
         )
         val centerDistance = predictedCenter.distanceTo(detection.box.center)
-        val iou = track.box.iou(detection.box)
+        val dx = track.velocity.x * dt
+        val dy = track.velocity.y * dt
+        val predictedBox = Box(track.box.left+dx, track.box.top+dy, track.box.right+dx, track.box.bottom+dy)
+        val iou = predictedBox.iou(detection.box)
+        val gate = maxOf(.055f, hypot(track.box.width, track.box.height) * 1.1f) + minOf(.13f, maxOf(track.speed * .5f, if (track.hits < 3) .35f else .08f) * dt)
+        if (centerDistance > gate) return 1f
+        val sizeRatio = minOf(track.box.area, detection.box.area) / maxOf(.00001f, maxOf(track.box.area, detection.box.area))
+        if (sizeRatio < .22f) return 1f
         val classPenalty = if (
             track.vehicleClass != VehicleClass.UNKNOWN &&
             detection.vehicleClass != VehicleClass.UNKNOWN &&
@@ -149,7 +156,7 @@ class VehicleTracker(
 
         // Long-baseline velocity is already much less noisy; a small EMA removes
         // the remaining box wobble without causing a large lag on real cars.
-        val alpha = 0.28f
+        val alpha = if (track.hits < 4 || rawVelocity.distanceTo(Vec2(0f,0f)) > .06f) .72f else .28f
         track.velocity = Vec2(
             track.velocity.x * (1f - alpha) + rawVelocity.x * alpha,
             track.velocity.y * (1f - alpha) + rawVelocity.y * alpha
@@ -162,7 +169,7 @@ class VehicleTracker(
         track.motionScore = track.motionScore * 0.70f + instantaneousScore * 0.30f
 
         // More conservative box smoothing than V7: labels stay visually stable.
-        track.box = track.box.blend(detection.box, 0.48f).clamp01()
+        track.box = detection.box.clamp01()
         track.confidence = detection.confidence
         track.lastSeenMs = timestampMs
         track.hits += 1

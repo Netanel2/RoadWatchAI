@@ -222,4 +222,69 @@ class CoreLogicTest {
         assertEquals(0, result.second.movingNow)
     }
 
+    @Test
+    fun fastVehicleInTinyFovCountsAfterTwoHits() {
+        val engine = VehicleStateEngine()
+        var now = 0L
+        val first = TrackSnapshot(
+            id = 77,
+            box = Box(.10f, .40f, .22f, .50f),
+            vehicleClass = VehicleClass.CAR,
+            confidence = .88f,
+            speed = 0f,
+            velocity = Vec2(0f, 0f),
+            ageMs = 0L,
+            lastSeenMs = now,
+            hits = 1,
+            motionScore = 0f
+        )
+        engine.update(listOf(first), now)
+
+        now = 120L
+        val second = first.copy(
+            box = Box(.145f, .40f, .265f, .50f),
+            speed = .08f,
+            velocity = Vec2(.08f, 0f),
+            ageMs = 120L,
+            lastSeenMs = now,
+            hits = 2,
+            motionScore = .18f
+        )
+        val result = engine.update(listOf(second), now)
+        assertEquals(1, result.second.passedToday)
+        assertTrue(result.first.isEmpty())
+    }
+
+    @Test
+    fun twoHitJitterDoesNotCreateFastPass() {
+        val engine = VehicleStateEngine()
+        var now = 0L
+        val first = TrackSnapshot(
+            id = 78,
+            box = Box(.30f, .40f, .42f, .50f),
+            vehicleClass = VehicleClass.CAR,
+            confidence = .90f,
+            speed = 0f,
+            velocity = Vec2(0f, 0f),
+            ageMs = 0L,
+            lastSeenMs = now,
+            hits = 1,
+            motionScore = 0f
+        )
+        engine.update(listOf(first), now)
+
+        now = 120L
+        val second = first.copy(
+            box = Box(.304f, .40f, .424f, .50f),
+            speed = .006f,
+            velocity = Vec2(.006f, 0f),
+            ageMs = 120L,
+            lastSeenMs = now,
+            hits = 2,
+            motionScore = .03f
+        )
+        val result = engine.update(listOf(second), now)
+        assertEquals(0, result.second.passedToday)
+    }
+
 }

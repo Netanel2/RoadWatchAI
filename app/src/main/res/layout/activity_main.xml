@@ -49,7 +49,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="V8 · FAST TRACK + AUTO SCENE"
+                    android:text="V9.1 · CROSSWALK + FAST PASS"
                     android:textColor="@color/rw_blue"
                     android:textSize="9sp"
                     android:textStyle="bold" />

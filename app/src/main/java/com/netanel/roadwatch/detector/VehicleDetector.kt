@@ -230,7 +230,12 @@ class VehicleDetector(
             val fused = fuse(generalCandidates + aerialCandidates)
                 .map { Detection(it.box, it.vehicleClass, it.confidence) }
 
-            val crosswalk = if (crosswalkSearchEnabled && frameNumber % CROSSWALK_SCAN_EVERY_N == 0L) {
+            val crosswalkScanEvery = if (crosswalkSearchEnabled) {
+                CROSSWALK_SCAN_EVERY_N
+            } else {
+                CROSSWALK_VERIFY_EVERY_N
+            }
+            val crosswalk = if (frameNumber % crosswalkScanEvery == 0L) {
                 estimateCrosswalk(oriented)
             } else {
                 null
@@ -996,13 +1001,202 @@ class VehicleDetector(
         }
 
         val box = bestBox ?: return null
-        val confidence = (
+
+        // V9: geometric stripes are only a candidate. A true zebra crossing must also
+        // contain a repeated high-contrast bright/dark rhythm. This rejects tiled
+        // sidewalks, curbs, paving seams and other stable patterns that fooled V8.
+        val zebraScore = zebraPatternScore(bitmap, box)
+        if (zebraScore < 0.56f) return null
+
+        val geometryConfidence = (
             0.43f +
                 (bestStripeCount.coerceAtMost(8) - 4) * 0.055f +
                 bestOverlap * 0.18f +
                 (bestScore - 0.70f).coerceIn(0f, 0.18f)
             ).coerceIn(0f, 0.95f)
+        val confidence = (geometryConfidence * 0.48f + zebraScore * 0.52f).coerceIn(0f, 0.97f)
         return CrosswalkEstimate(box, confidence)
+    }
+
+    /**
+     * V9 crosswalk validator.
+     *
+     * It samples the candidate at several orientations and looks for a regular
+     * sequence of bright neutral stripes separated by substantially darker gaps.
+     * The detector is intentionally orientation-agnostic so the phone can be moved
+     * to another street without a pre-configured crosswalk angle.
+     */
+    private fun zebraPatternScore(bitmap: Bitmap, box: Box): Float {
+        val leftPx = (box.left * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+        val topPx = (box.top * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+        val rightPx = (box.right * bitmap.width).toInt().coerceIn(leftPx + 1, bitmap.width)
+        val bottomPx = (box.bottom * bitmap.height).toInt().coerceIn(topPx + 1, bitmap.height)
+        val cropW = rightPx - leftPx
+        val cropH = bottomPx - topPx
+        if (cropW < 24 || cropH < 16) return 0f
+
+        // Work on a small grid. Real zebra stripes become several separate, elongated
+        // neutral-white connected components. Paving, curbs and a bright sidewalk
+        // normally become one large blob or many tiny fragments instead.
+        val step = kotlin.math.ceil(max(cropW, cropH) / 96.0).toInt().coerceAtLeast(1)
+        val gridW = ((cropW + step - 1) / step).coerceAtLeast(1)
+        val gridH = ((cropH + step - 1) / step).coerceAtLeast(1)
+        val white = BooleanArray(gridW * gridH)
+        for (gy in 0 until gridH) {
+            val y = (topPx + gy * step).coerceAtMost(bitmap.height - 1)
+            for (gx in 0 until gridW) {
+                val x = (leftPx + gx * step).coerceAtMost(bitmap.width - 1)
+                white[gy * gridW + gx] = isWhiteLike(bitmap.getPixel(x, y))
+            }
+        }
+
+        data class Component(
+            val area: Int,
+            val minX: Int,
+            val maxX: Int,
+            val minY: Int,
+            val maxY: Int,
+            val centerX: Float,
+            val centerY: Float
+        ) {
+            val width: Int get() = maxX - minX + 1
+            val height: Int get() = maxY - minY + 1
+            val boxArea: Int get() = width * height
+            val fill: Float get() = area.toFloat() / boxArea.coerceAtLeast(1)
+            val aspect: Float get() = max(width, height).toFloat() / min(width, height).coerceAtLeast(1)
+            val longSide: Float get() = max(width, height).toFloat()
+        }
+
+        val visited = BooleanArray(white.size)
+        val stack = IntArray(white.size)
+        val components = mutableListOf<Component>()
+        val dx = intArrayOf(1, -1, 0, 0)
+        val dy = intArrayOf(0, 0, 1, -1)
+
+        for (gy in 0 until gridH) {
+            for (gx in 0 until gridW) {
+                val seed = gy * gridW + gx
+                if (!white[seed] || visited[seed]) continue
+
+                var top = 0
+                stack[top++] = seed
+                visited[seed] = true
+                var area = 0
+                var minX = gx
+                var maxX = gx
+                var minY = gy
+                var maxY = gy
+                var sumX = 0f
+                var sumY = 0f
+
+                while (top > 0) {
+                    val index = stack[--top]
+                    val cy = index / gridW
+                    val cx = index % gridW
+                    area++
+                    sumX += cx
+                    sumY += cy
+                    minX = min(minX, cx)
+                    maxX = max(maxX, cx)
+                    minY = min(minY, cy)
+                    maxY = max(maxY, cy)
+
+                    for (k in 0..3) {
+                        val nx = cx + dx[k]
+                        val ny = cy + dy[k]
+                        if (nx !in 0 until gridW || ny !in 0 until gridH) continue
+                        val ni = ny * gridW + nx
+                        if (!white[ni] || visited[ni]) continue
+                        visited[ni] = true
+                        stack[top++] = ni
+                    }
+                }
+
+                if (area >= 3) {
+                    components += Component(
+                        area = area,
+                        minX = minX,
+                        maxX = maxX,
+                        minY = minY,
+                        maxY = maxY,
+                        centerX = sumX / area,
+                        centerY = sumY / area
+                    )
+                }
+            }
+        }
+
+        val totalGrid = (gridW * gridH).coerceAtLeast(1)
+        val stripes = components.filter { c ->
+            val areaRatio = c.area.toFloat() / totalGrid
+            areaRatio in 0.0035f..0.07f &&
+                c.aspect >= 1.65f &&
+                c.fill >= 0.25f
+        }
+        if (stripes.size !in 4..16) return 0f
+
+        // Stripe centres of a real crossing lie along one dominant axis. Use a tiny
+        // PCA to find that axis, then check that the spacing is regular.
+        val meanX = stripes.map { it.centerX }.average().toFloat()
+        val meanY = stripes.map { it.centerY }.average().toFloat()
+        var covXX = 0f
+        var covYY = 0f
+        var covXY = 0f
+        stripes.forEach { s ->
+            val x = s.centerX - meanX
+            val y = s.centerY - meanY
+            covXX += x * x
+            covYY += y * y
+            covXY += x * y
+        }
+        val angle = 0.5f * kotlin.math.atan2(2f * covXY, covXX - covYY)
+        val axisX = kotlin.math.cos(angle)
+        val axisY = kotlin.math.sin(angle)
+        val projections = stripes.map { s ->
+            (s.centerX - meanX) * axisX + (s.centerY - meanY) * axisY
+        }.sorted()
+        if (projections.size < 4) return 0f
+
+        val rawGaps = projections.zipWithNext { a, b -> b - a }
+        val medianGap = medianFloat(rawGaps).coerceAtLeast(0.001f)
+        val gaps = rawGaps.filter { it > max(1f, medianGap * 0.35f) }
+        if (gaps.size < 3) return 0f
+
+        val gapCv = coefficientOfVariation(gaps)
+        val longCv = coefficientOfVariation(stripes.map { it.longSide })
+        val areaCv = coefficientOfVariation(stripes.map { it.area.toFloat() })
+        if (gapCv > 0.70f || longCv > 0.60f) return 0f
+
+        val countScore = ((stripes.size - 3) / 7f).coerceIn(0f, 1f)
+        val spacingScore = (1f - gapCv / 0.70f).coerceIn(0f, 1f)
+        val lengthScore = (1f - longCv / 0.60f).coerceIn(0f, 1f)
+        val areaScore = (1f - areaCv / 1.10f).coerceIn(0f, 1f)
+
+        return (
+            countScore * 0.35f +
+                spacingScore * 0.30f +
+                lengthScore * 0.20f +
+                areaScore * 0.15f
+            ).coerceIn(0f, 1f)
+    }
+
+    private fun medianFloat(values: List<Float>): Float {
+        if (values.isEmpty()) return 0f
+        val sorted = values.sorted()
+        val mid = sorted.size / 2
+        return if (sorted.size % 2 == 1) sorted[mid] else (sorted[mid - 1] + sorted[mid]) * 0.5f
+    }
+
+    private fun coefficientOfVariation(values: List<Float>): Float {
+        if (values.isEmpty()) return 99f
+        val mean = values.average().toFloat().coerceAtLeast(0.001f)
+        var sum = 0f
+        values.forEach { value ->
+            val d = value - mean
+            sum += d * d
+        }
+        val variance = sum / values.size
+        return kotlin.math.sqrt(variance) / mean
     }
 
     private fun isWhiteLike(pixel: Int): Boolean {
@@ -1213,6 +1407,7 @@ class VehicleDetector(
         private const val AERIAL_EVERY_N = 4L
         private const val PERSON_TILE_EVERY_N = 2L
         private const val CROSSWALK_SCAN_EVERY_N = 2L
+        private const val CROSSWALK_VERIFY_EVERY_N = 12L
         private const val SCENE_CHECK_EVERY_N = 8L
         private const val SCENE_CHANGE_THRESHOLD = 0.16f
         private const val SCENE_CHANGE_CONFIRMATIONS = 3

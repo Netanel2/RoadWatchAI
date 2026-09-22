@@ -22,7 +22,11 @@ class VehicleStateEngine(
     private val passDisplacementMin: Float = 0.055f,
     private val evidenceFreshnessMs: Long = 900L,
     private val stationaryRelativeMax: Float = 0.10f,
-    private val movingRelativeMin: Float = 0.20f
+    private val movingRelativeMin: Float = 0.20f,
+    private val fastPassConfidenceMin: Float = 0.40f,
+    private val fastPassAbsoluteMin: Float = 0.018f,
+    private val fastPassRelativeMin: Float = 0.18f,
+    private val fastPassSpeedMin: Float = 0.020f
 ) {
     private data class Memory(
         var state: VehicleState = VehicleState.UNKNOWN,
@@ -98,6 +102,12 @@ class VehicleStateEngine(
         val activeIds = tracks.mapTo(mutableSetOf()) { it.id }
         memory.keys.filter { it !in activeIds }.toList().forEach(memory::remove)
 
+        // FAST-PASS path: remember the very first observation of every track.
+        // A vehicle that only spends 2 frames inside a tiny field of view can still
+        // be counted if its displacement is clearly larger than detector jitter.
+        tracks.forEach { track -> observeFastPass(track, nowMs) }
+
+        // UI / parked-vs-moving states remain conservative and still require 3 hits.
         val visuals = tracks
             .filter { it.hits >= 3 }
             .map { track -> updateTrack(track, nowMs) }
@@ -127,6 +137,56 @@ class VehicleStateEngine(
         @Suppress("UNUSED_PARAMETER") zones: ZoneConfig,
         nowMs: Long
     ): Pair<List<TrackVisual>, DashboardMetrics> = update(tracks, nowMs)
+
+
+    private fun observeFastPass(track: TrackSnapshot, nowMs: Long) {
+        val point = track.bottomCenter
+        val mem = memory.getOrPut(track.id) {
+            Memory(
+                stateSinceMs = nowMs,
+                firstPoint = point,
+                samplePoint = point,
+                sampleTimeMs = nowMs
+            )
+        }
+
+        if (nowMs - track.lastSeenMs > evidenceFreshnessMs) return
+
+        val first = mem.firstPoint ?: point.also { mem.firstPoint = it }
+        mem.maxDisplacement = max(mem.maxDisplacement, first.distanceTo(point))
+
+        // One frame is never enough to prove motion safely. With two or more hits,
+        // use an adaptive threshold tied to the vehicle's own on-screen size.
+        if (track.hits < 2 || mem.countedPass) return
+
+        val objectScale = max(0.035f, hypot(track.box.width, track.box.height))
+        val adaptiveDistance = max(fastPassAbsoluteMin, objectScale * fastPassRelativeMin)
+        val clearMotion = track.speed >= fastPassSpeedMin || track.motionScore >= 0.10f
+        val reliableDetection = track.confidence >= fastPassConfidenceMin
+
+        if (reliableDetection && clearMotion && mem.maxDisplacement >= adaptiveDistance) {
+            mem.everMoving = true
+            countPassIfUnique(track, point, nowMs, mem)
+        }
+    }
+
+    private fun countPassIfUnique(
+        track: TrackSnapshot,
+        point: Vec2,
+        nowMs: Long,
+        mem: Memory
+    ) {
+        if (mem.countedPass) return
+        recentPasses.removeAll { nowMs - it.timeMs > 900L }
+        val duplicate = recentPasses.any {
+            it.vehicleClass == track.vehicleClass && it.point.distanceTo(point) < 0.07f
+        }
+        if (!duplicate) {
+            passedToday++
+            recentPasses += PassEvent(nowMs, point, track.vehicleClass)
+        }
+        mem.countedPass = true
+    }
 
     private fun updateTrack(track: TrackSnapshot, nowMs: Long): TrackVisual {
         val point = track.bottomCenter
@@ -213,15 +273,7 @@ class VehicleStateEngine(
         }
 
         if (!mem.countedPass && mem.everMoving && mem.maxDisplacement >= passDisplacementMin) {
-            recentPasses.removeAll { nowMs - it.timeMs > 900L }
-            val duplicate = recentPasses.any {
-                it.vehicleClass == track.vehicleClass && it.point.distanceTo(point) < 0.07f
-            }
-            if (!duplicate) {
-                passedToday++
-                recentPasses += PassEvent(nowMs, point, track.vehicleClass)
-            }
-            mem.countedPass = true
+            countPassIfUnique(track, point, nowMs, mem)
         }
 
         return TrackVisual(track, mem.state, mem.stateSinceMs)

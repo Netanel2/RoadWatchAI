@@ -274,7 +274,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
     override fun onReady(delegateName: String) {
         detectorReady = true
         delegateLabel = delegateName
-        runOnUiThread { setStatus("V8 מוכן ✓ FAST TRACK + AUTO SCENE") }
+        runOnUiThread { setStatus("V9.1 מוכן ✓ CROSSWALK + FAST PASS") }
     }
 
     override fun onResult(result: VehicleDetector.Result) {
@@ -326,8 +326,8 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
                 result.sceneChanged -> "NEW SCENE · לומד מחדש אוטומטית"
                 metrics.yieldRiskNow > 0 -> "⚠ חשד: רכב בתנועה ליד הולך רגל במעבר"
                 metrics.peopleInCrosswalkNow > 0 -> "מעבר פעיל · ${metrics.peopleInCrosswalkNow} חוצים"
-                crosswalkState.locked -> "V8 FAST · מעבר LOCKED · אנשים ${metrics.peopleNow}"
-                else -> "V8 FAST · לומד סצנה · מעבר ${crosswalkState.stableHits}/6"
+                crosswalkState.locked -> "V9.1 · מעבר LOCKED · אנשים ${metrics.peopleNow}"
+                else -> "V9.1 · מאמת מעבר חציה · ${crosswalkState.stableHits}/8"
             }
         }
     }
@@ -352,7 +352,7 @@ class MainActivity : AppCompatActivity(), VehicleDetector.Listener {
         txtActiveTracks.text = "רכבים ${metrics.activeTracks}"
         txtCrosswalkLock.text = when {
             crosswalkState?.locked == true -> "CROSSWALK LOCK ✓"
-            (crosswalkState?.stableHits ?: 0) > 0 -> "לומד מעבר ${crosswalkState?.stableHits}/6"
+            (crosswalkState?.stableHits ?: 0) > 0 -> "מאמת מעבר ${crosswalkState?.stableHits}/8"
             else -> "מחפש מעבר חציה"
         }
 

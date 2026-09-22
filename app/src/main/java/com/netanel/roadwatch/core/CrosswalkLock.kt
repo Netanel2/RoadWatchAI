@@ -1,14 +1,14 @@
 package com.netanel.roadwatch.core
 
 /**
- * V7 crosswalk stabilizer.
+ * V9 crosswalk stabilizer.
  *
  * A lock is earned only after repeated, geometrically similar stripe-cluster
  * observations. Unlike V6, a bad lock can recover when several strong incompatible
  * observations consistently point somewhere else.
  */
 class CrosswalkLock(
-    private val requiredStableHits: Int = 6,
+    private val requiredStableHits: Int = 8,
     private val candidateTimeoutMs: Long = 2200L,
     private val lockedRefreshAlpha: Float = 0.06f
 ) {
@@ -52,7 +52,7 @@ class CrosswalkLock(
                 lockedLastSeenMs = nowMs
                 incompatibleCandidate = null
                 incompatibleHits = 0
-            } else if (frameEstimate != null && frameEstimate.confidence >= 0.56f) {
+            } else if (frameEstimate != null && frameEstimate.confidence >= 0.68f) {
                 val previous = incompatibleCandidate
                 if (previous != null && compatible(previous.box, frameEstimate.box)) {
                     incompatibleCandidate = CrosswalkEstimate(
@@ -68,7 +68,7 @@ class CrosswalkLock(
                 // Do not let one wrong historical lock live forever. A replacement
                 // must be repeatedly observed and the old lock must have stopped
                 // receiving compatible evidence for several seconds.
-                if (incompatibleHits >= 7 && nowMs - lockedLastSeenMs > 3500L) {
+                if (incompatibleHits >= 6 && nowMs - lockedLastSeenMs > 3000L) {
                     locked = incompatibleCandidate
                     lockedLastSeenMs = nowMs
                     candidate = null
@@ -101,7 +101,7 @@ class CrosswalkLock(
         }
         candidateLastSeenMs = nowMs
 
-        if (candidateHits >= requiredStableHits && (candidate?.confidence ?: 0f) >= 0.52f) {
+        if (candidateHits >= requiredStableHits && (candidate?.confidence ?: 0f) >= 0.68f) {
             locked = candidate
             lockedLastSeenMs = nowMs
             return State(locked, true, candidateHits, lockedLastSeenMs)

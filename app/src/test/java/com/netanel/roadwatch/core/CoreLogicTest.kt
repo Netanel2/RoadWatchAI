@@ -156,8 +156,8 @@ class CoreLogicTest {
     fun crosswalkLocksAfterStableRepeatedEstimates() {
         val lock = CrosswalkLock(requiredStableHits = 3)
         var now = 0L
-        val a = CrosswalkEstimate(Box(.10f, .65f, .45f, .80f), .65f)
-        val b = CrosswalkEstimate(Box(.11f, .65f, .46f, .80f), .68f)
+        val a = CrosswalkEstimate(Box(.10f, .65f, .45f, .80f), .75f)
+        val b = CrosswalkEstimate(Box(.11f, .65f, .46f, .80f), .78f)
         assertTrue(!lock.update(a, now).locked)
         now += 100
         assertTrue(!lock.update(b, now).locked)
